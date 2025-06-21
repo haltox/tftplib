@@ -24,8 +24,8 @@ namespace tftplib
 
 		bool IsValid() const;
 		bool IsBroadcast() const;
-		const std::string GetSourceAddress() const;
-		const std::string GetDestAddress() const;
+		const std::string &GetSourceAddress() const;
+		const std::string &GetDestAddress() const;
 		uint16_t GetSourcePort() const;
 		uint16_t GetDestPort() const;
 		
@@ -59,6 +59,19 @@ namespace tftplib
 
 		friend class DatagramFactory;
 		friend class DatagramAssembly;
+
+	public:
+		Datagram& Write(const void* data, size_t size);
+		Datagram& operator<<(bool value);
+		Datagram& operator<<(uint8_t value);
+		Datagram& operator<<(uint16_t value);
+		Datagram& operator<<(uint32_t value);
+		Datagram& operator<<(uint64_t value);
+		Datagram& operator<<(int8_t value);
+		Datagram& operator<<(int16_t value);
+		Datagram& operator<<(int32_t value);
+		Datagram& operator<<(int64_t value);
+		Datagram& operator<<(const char* value);
 	};
 }
 

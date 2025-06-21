@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -141,18 +141,23 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="Allocator.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PoolOfBuffers.h" />
     <ClInclude Include="Datagram.h" />
     <ClInclude Include="DatagramAssembly.h" />
     <ClInclude Include="DatagramFactory.h" />
+    <ClInclude Include="RingBuffer.h" />
     <ClInclude Include="Server.h" />
+    <ClInclude Include="ServerWorker.h" />
+    <ClInclude Include="Signal.h" />
     <ClInclude Include="streambuf_noop.h" />
     <ClInclude Include="tftp_messages.h" />
     <ClInclude Include="UdpSocketWindows.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Allocator.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
@@ -163,7 +168,10 @@
     <ClCompile Include="DatagramAssembly.cpp" />
     <ClCompile Include="DatagramFactory.cpp" />
     <ClCompile Include="Server.cpp" />
+    <ClCompile Include="ServerWorker.cpp" />
+    <ClCompile Include="Signal.cpp" />
     <ClCompile Include="streambuf_noop.cpp" />
+    <ClCompile Include="tftp_messages.cpp" />
     <ClCompile Include="UdpSocketWindows.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

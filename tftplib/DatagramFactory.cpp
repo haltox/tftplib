@@ -34,6 +34,26 @@ namespace tftplib {
 		return DatagramAssembly{_self};
 	}
 
+	std::shared_ptr<Datagram>
+	DatagramFactory::BuildResponse(const uint8_t *data,
+			uint16_t len,
+			const Datagram& respondTo)
+	{
+		auto txAssembly = StartAssembly();
+
+		txAssembly.SetDestinationAddress(respondTo.GetSourceAddress());
+		txAssembly.SetDestinationPort(respondTo.GetSourcePort());
+		
+		if (len > txAssembly.GetDataBufferSize())
+		{
+			return nullptr;
+		}
+
+		memcpy(txAssembly.GetDataBuffer(), data, len);
+		txAssembly.SetDataSize(len);
+		return txAssembly.Finalize();
+	}
+
 	void 
 	DatagramFactory::Reclaim(Datagram& datagram)
 	{

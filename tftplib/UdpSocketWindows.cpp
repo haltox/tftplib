@@ -10,8 +10,101 @@
 #include <tchar.h>
 #include <combaseapi.h>
 
+#include <thread>
+#include <chrono>
+
 namespace tftplib
 {
+
+/***************************************************************************
+ *	L O C A L   A N D   I N T E R N A L   T Y P E S 
+ ***************************************************************************/
+
+	/*
+	 * struct UdpSocketWindows::OsSpecific
+	 *		RAII container for OS specific resources.
+	 */
+	struct UdpSocketWindows::OsSpecific 
+	{
+		addrinfo* LocalAddress{ nullptr };
+		SOCKET Socket{};
+		LPFN_WSARECVMSG fnRcvMsg{ nullptr };
+
+		~OsSpecific() {
+			if (LocalAddress) {
+				freeaddrinfo(LocalAddress);
+				LocalAddress = nullptr;
+			}
+			if (Socket != INVALID_SOCKET) {
+				closesocket(Socket);
+				Socket = INVALID_SOCKET;
+			}
+		}
+	};
+
+	/*
+	 * struct AddrInfoBox
+	 *		RAII container for addr information.
+	 */
+	struct AddrInfoBox {
+		addrinfo* addrInfo{ nullptr };
+		~AddrInfoBox() {
+			if (addrInfo) {
+				freeaddrinfo(addrInfo);
+				addrInfo = nullptr;
+			}
+		}
+	};
+
+	/*
+	 * class ActivityGuard
+	 *		RAII container for activity counter.
+	 */
+	class ActivityGuard {
+	private:
+		std::atomic<int>& _counter;
+	public:
+		ActivityGuard(std::atomic<int>& activityCounter)
+			: _counter{ activityCounter }
+		{
+			_counter.fetch_add(1);
+		}
+
+		~ActivityGuard()
+		{
+			_counter.fetch_add(-1);
+		}
+	};
+
+	/*
+	 * class UdpSocketWindows::GlobalOsContext
+	 *		RAII container for global os context.
+	 *		Initialized and deinitialize required APIs and DLLs
+	 *		that are required across socket lifetimes.
+	 */
+	UdpSocketWindows::GlobalOsContext::GlobalOsContext() {
+		WSADATA wsaData;
+		if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+			throw std::runtime_error("WSAStartup failed");
+		}
+
+		if (LOBYTE(wsaData.wVersion) != 2 || HIBYTE(wsaData.wVersion) != 2) {
+			WSACleanup();
+			throw std::runtime_error("Could not find a usable version of Winsock.");
+		}
+	}
+
+	UdpSocketWindows::GlobalOsContext::~GlobalOsContext() {
+		WSACleanup();
+	}
+
+/***************************************************************************
+ *	F I L E   L O C A L   S T A T I C   F U N C T I O N S
+ ***************************************************************************/
+
+	/*
+	 * Addr to String conversion
+	 */
 	std::string AddrToStr(IN_ADDR* addr)
 	{
 		char ip[INET_ADDRSTRLEN];
@@ -19,6 +112,9 @@ namespace tftplib
 		return std::string(ip);
 	}
 
+	/*
+	 * Addr to String conversion
+	 */
 	std::string AddrToStr(IN6_ADDR* addr)
 	{
 		char ip[INET6_ADDRSTRLEN];
@@ -26,6 +122,9 @@ namespace tftplib
 		return std::string(ip);
 	}
 
+	/*
+	 * Addr to String conversion
+	 */
 	std::string AddrToStr(sockaddr* addr) 
 	{
 		if (addr == nullptr) {
@@ -47,36 +146,67 @@ namespace tftplib
 		return "[error]";
 	}
 
-	struct UdpSocketWindows::OsSpecific {
-		addrinfo* LocalAddress{ nullptr };
-		SOCKET ListenSocket{};
-		LPFN_WSARECVMSG fnRcvMsg{ nullptr };
+	/*
+	 * String to addr conversion
+	 */
+	int
+	ParseAddress(const char* hostname,
+			uint16_t port,
+			addrinfo** address,
+			int addressFamily)
+	{
+		addrinfo hints{};
+		hints.ai_family = addressFamily;
+		hints.ai_socktype = SOCK_DGRAM;
+		hints.ai_protocol = IPPROTO_UDP;
 
-		~OsSpecific() {
-			if (LocalAddress) {
-				freeaddrinfo(LocalAddress);
-				LocalAddress = nullptr;
-			}
-			if (ListenSocket != INVALID_SOCKET) {
-				closesocket(ListenSocket);
-				ListenSocket = INVALID_SOCKET;
-			}
-		}
-	};
+		std::string portStr = std::to_string(port);
 
+		int result = getaddrinfo(hostname,
+			portStr.c_str(),
+			&hints,
+			address);
 
+		return result;
+	}
+
+	/*
+	 * String to addr conversion
+	 */
+	int
+	ParseAddress(const std::string &hostname,
+			uint16_t port,
+			addrinfo** address,
+			int addressFamily)
+	{
+		return ParseAddress(hostname.c_str(), port, address, addressFamily);
+	}
+	
+/***************************************************************************
+ *	C L A S S   S T A T I C   F U N C T I O N S
+ ***************************************************************************/
+
+	std::unique_ptr<UdpSocketWindows::GlobalOsContext>
+	UdpSocketWindows::InitGlobalOsContext()
+	{
+		return std::make_unique<GlobalOsContext>();
+	}
+
+/***************************************************************************
+ *	U D P _ S O C K E T _ W I N D O W S   P U B L I C   A P I
+ ***************************************************************************/
+	
 	UdpSocketWindows::UdpSocketWindows()
 		: _out{ nullptr }
 		, _err{ nullptr }
 		, _state{ Inactive }
-		, _os{ std::make_unique<OsSpecific>() }
+		, _osLifeCycle{ nullptr }
+		, _osHandle { _osLifeCycle }
 	{
-		InitWSA();
 	}
 
 	UdpSocketWindows::~UdpSocketWindows() 
 	{
-		WSACleanup();
 	}
 
 	UdpSocketWindows& 
@@ -92,23 +222,130 @@ namespace tftplib
 		return *this;
 	}
 
+	uint16_t
+	UdpSocketWindows::GetSocketPort() const
+	{
+		if (!IsBound()) {
+			Out() << "Socket is not bound." << std::endl;
+			return 0;
+		}
+
+		std::shared_ptr<OsSpecific> os = _osHandle.lock();
+		if (!os) {
+			Out() << "Socket is not bound." << std::endl;
+			return 0;
+		}
+
+		switch (os->LocalAddress->ai_addr->sa_family)
+		{
+		case AF_INET: {
+			sockaddr_in* inet4 = (sockaddr_in*)os->LocalAddress->ai_addr;
+			return ntohs(inet4->sin_port);
+		}
+		case AF_INET6: {
+			sockaddr_in6* inet6 = (sockaddr_in6*)os->LocalAddress->ai_addr;
+			return ntohs(inet6->sin6_port);
+		}
+		}
+
+		return 0;
+	}
+
+	bool
+	UdpSocketWindows::IsIpv6() const {
+		std::shared_ptr<OsSpecific> os = Os();
+		return os && os->LocalAddress->ai_family == AF_INET6;
+	}
+
+	std::string 
+	UdpSocketWindows::GetLocalAddress() const
+	{
+		std::shared_ptr<OsSpecific> os = Os();
+		if (os) 
+		{
+			switch (os->LocalAddress->ai_family) 
+			{
+				case AF_INET: {
+					sockaddr_in* addr = (sockaddr_in*)os->LocalAddress->ai_addr;
+					return AddrToStr(&addr->sin_addr);
+				} break;
+
+				case AF_INET6: {
+					sockaddr_in6* addr = (sockaddr_in6*)os->LocalAddress->ai_addr;
+					return AddrToStr(&addr->sin6_addr);
+				} break;
+			}
+		}
+
+		return "[Not bound]";
+	}
+
+	uint16_t 
+	UdpSocketWindows::GetLocalPort() const
+	{
+		std::shared_ptr<OsSpecific> os = Os();
+		if (os)
+		{
+			switch (os->LocalAddress->ai_family)
+			{
+				case AF_INET: {
+					sockaddr_in* addr = (sockaddr_in*)os->LocalAddress->ai_addr;
+					return ntohs(addr->sin_port);
+				} break;
+
+				case AF_INET6: {
+					sockaddr_in6* addr = (sockaddr_in6*)os->LocalAddress->ai_addr;
+					return ntohs(addr->sin6_port);
+				} break;
+			}
+		}
+
+		return 0;
+	}
+
+	bool
+	UdpSocketWindows::HasDatagram() const
+	{
+		return Poll(0);
+	}
+
+	bool
+	UdpSocketWindows::Poll(uint32_t timeout) const
+	{
+		std::shared_ptr<OsSpecific> os = Os();
+		if (!os) {
+			return false;
+		}
+
+		WSAPOLLFD pollFd{ 0 };
+		pollFd.fd = _osLifeCycle->Socket;
+		pollFd.events = POLLRDNORM;
+
+		int result = WSAPoll(&pollFd, 1, timeout);
+		if (result == SOCKET_ERROR) {
+			LogSocketError("WSAPoll");
+			return false;
+		}
+
+		return result > 0
+			&& (pollFd.revents == POLLRDNORM);
+	}
+
 	bool
 	UdpSocketWindows::Bind(const char* hostname, uint16_t port) 
 	{
-		if (GetState() != Inactive) {
-			Out() << "Socket is already bound or listening." << std::endl;
+		State expectedState = Inactive;
+		if (! _state.compare_exchange_strong(expectedState, Binding) ) {
+			Out() << "Socket is already bound." << std::endl;
 			return false;
 		}
 
-		std::unique_ptr<UdpSocketWindows::OsSpecific> os{ std::make_unique<OsSpecific>() };
-
-		if (!PrepareOSAddress(hostname, port, os.get())) {
-			return false;
+		while (_activityCounter > 0) 
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds{ 10 });
 		}
 
-		Out() << "UDP socket addr: "
-			<< AddrToStr(os->LocalAddress->ai_addr)
-			<< std::endl;
+		std::shared_ptr<UdpSocketWindows::OsSpecific> os{ std::make_shared<OsSpecific>() };
 
 		if (!CreateSocket(os.get())) {
 			return false;
@@ -122,59 +359,51 @@ namespace tftplib
 			return false;
 		}
 
-		if (!BindSocket(os.get())) {
+		if (!BindSocket(hostname, port, os.get())) {
 			return false;
 		}
+
+		Out() << "UDP socket addr: "
+			<< AddrToStr(os->LocalAddress->ai_addr)
+			<< std::endl;
 
 		// ************************************************************
 		// Socket is bound. Update state.
 		// ************************************************************
-		std::swap(_os, os);
+		std::swap(_osLifeCycle, os);
+		_osHandle = _osLifeCycle;
+
 		_state = Bound;
 
 		return true;
 	}
 
-	uint16_t 
-	UdpSocketWindows::GetSocketPort() const
+	bool 
+	UdpSocketWindows::Unbind()
 	{
-		if (!IsBound()) {
-			Err() << "Socket is not bound." << std::endl;
-			return 0;
-		}
+		State expectedState = Bound;
+		bool exchanged = false;
 
-		switch (_os->LocalAddress->ai_addr->sa_family) 
+		do
 		{
-			case AF_INET: {
-				sockaddr_in* inet4 = (sockaddr_in*)_os->LocalAddress->ai_addr;
-				return ntohs(inet4->sin_port);
+			expectedState = Bound;
+			exchanged = _state.compare_exchange_weak(expectedState, Unbinding);
+			if (expectedState == Inactive || expectedState == Unbinding) {
+				return true;
 			}
-			case AF_INET6: {
-				sockaddr_in6* inet6 = (sockaddr_in6*)_os->LocalAddress->ai_addr;
-				return ntohs(inet6->sin6_port);
-			}
-		}
+			std::this_thread::sleep_for(std::chrono::milliseconds{10});
+		} while(!exchanged);
 
-		return 0;
-	}
-
-	bool
-	UdpSocketWindows::HasDatagram() const
-	{
-		fd_set readSet;
-		FD_ZERO(&readSet);
-		FD_SET(_os->ListenSocket, &readSet);
-
-		timeval timeout{ 0 };
-
-		return select(0, &readSet, nullptr, nullptr, &timeout);
+		_osLifeCycle = nullptr;
+		_state = Inactive;
+		return true;
 	}
 
 	std::shared_ptr<tftplib::Datagram>
 	UdpSocketWindows::Receive(DatagramFactory& factory)
 	{
-		if (!IsBound()) {
-			Err() << "Socket is not ready to receive messages." << std::endl;
+		std::shared_ptr<OsSpecific> os = Os();
+		if (!os) {
 			return nullptr;
 		}
 		
@@ -218,8 +447,8 @@ namespace tftplib
 		// ************************************************************
 		// Receive the message
 		// ************************************************************
-		int result = _os->fnRcvMsg(
-			_os->ListenSocket, &msg,
+		int result = os->fnRcvMsg(
+			os->Socket, &msg,
 			&messageLength,
 			nullptr, nullptr);
 
@@ -280,56 +509,63 @@ namespace tftplib
 		return assembly.Finalize();
 	}
 
-	bool UdpSocketWindows::IsIpv6() const {
-		if (!IsBound()) {
-			Err() << "Socket is not bound." << std::endl;
+	bool
+	UdpSocketWindows::Send(std::shared_ptr<tftplib::Datagram> datagram)
+	{
+		std::shared_ptr<OsSpecific> os = Os();
+		if (!os) {
 			return false;
 		}
-		return _os->LocalAddress->ai_family == AF_INET6;
-	}
 
-	void UdpSocketWindows::InitWSA() {
-		WSADATA wsaData;
-		int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-		if (result != 0) {
-			Err() << "WSAStartup failed with error: "
-				<< result
-				<< std::endl;
-			throw std::runtime_error("WSAStartup failed");
+		WSABUF buffer {0};
+		buffer.buf = datagram->GetDataBuffer();
+		buffer.len = datagram->GetDataSize();
+
+		DWORD sentBytes = 0;
+		
+		AddrInfoBox boxed {};
+		int result = ParseAddress(datagram->GetDestAddress(), 
+			datagram->GetDestPort(), 
+			&boxed.addrInfo,
+			AF_UNSPEC);
+
+		if( result != 0 ) 
+		{
+			LogSocketError("Send::ParseAddress");
+			return false;
 		}
 
-		if (LOBYTE(wsaData.wVersion) != 2 || HIBYTE(wsaData.wVersion) != 2) {
-			WSACleanup();
-			Err() << "Could not find a usable version of Winsock."
-				<< std::endl;
-			throw std::runtime_error("Could not find a usable version of Winsock.");
-		}
-	}
+		result = WSASendTo(
+			os->Socket,
+			&buffer, 1,
+			&sentBytes,
+			0,
+			boxed.addrInfo->ai_addr, boxed.addrInfo->ai_addrlen,
+			nullptr, nullptr
+		);
 
-	bool
-	UdpSocketWindows::PrepareOSAddress(const char* hostname,
-			uint16_t port,
-			OsSpecific* os)
-	{
-		addrinfo hints{};
-		hints.ai_family = AF_INET;			// IPv4
-		hints.ai_socktype = SOCK_DGRAM;		// UDP
-		hints.ai_protocol = IPPROTO_UDP;	// UDP protocol
-		hints.ai_flags = AI_PASSIVE;
-
-		std::string portStr = std::to_string(port);
-
-		int result = getaddrinfo(hostname,
-			portStr.c_str(),
-			&hints,
-			&os->LocalAddress);
-
-		if (result != 0) {
-			LogSocketError("getaddrinfo");
+		if (result != 0)
+		{
+			LogSocketError("Send::SendTo");
 			return false;
 		}
 
 		return true;
+	}
+
+/***************************************************************************
+ *	U D P _ S O C K E T _ W I N D O W S   P R I V A T E   A P I
+ ***************************************************************************/
+	std::shared_ptr<UdpSocketWindows::OsSpecific> 
+	UdpSocketWindows::Os() const
+	{
+		ActivityGuard guard(_activityCounter);
+
+		if (!IsBound()) {
+			return nullptr;
+		}
+
+		return _osHandle.lock();
 	}
 
 	bool
@@ -348,7 +584,7 @@ namespace tftplib
 			return false;
 		}
 
-		os->ListenSocket = WSASocket(
+		os->Socket = WSASocket(
 			os->LocalAddress->ai_family,
 			os->LocalAddress->ai_socktype,
 			os->LocalAddress->ai_protocol,
@@ -357,11 +593,7 @@ namespace tftplib
 			WSA_FLAG_OVERLAPPED
 		);
 
-		os->ListenSocket = socket(os->LocalAddress->ai_family,
-			os->LocalAddress->ai_socktype,
-			os->LocalAddress->ai_protocol);
-
-		if (os->ListenSocket == INVALID_SOCKET) {
+		if (os->Socket == INVALID_SOCKET) {
 			LogSocketError("socket creation");
 			return false;
 		}
@@ -375,7 +607,7 @@ namespace tftplib
 		bool isIpv6 = os->LocalAddress->ai_family == AF_INET6;
 
 		DWORD ipPktInfo = 0x1337; // viva them truthy values.
-		int result = setsockopt(os->ListenSocket,
+		int result = setsockopt(os->Socket,
 			isIpv6 ? IPPROTO_IPV6 : IPPROTO_IP,
 			isIpv6 ? IPV6_PKTINFO : IP_PKTINFO,
 			(char*)&ipPktInfo,
@@ -388,14 +620,43 @@ namespace tftplib
 	}
 
 	bool
-		UdpSocketWindows::BindSocket(OsSpecific* os)
+	UdpSocketWindows::BindSocket(const char* hostname,
+		uint16_t port,
+		OsSpecific* os)
 	{
-		int result = bind(os->ListenSocket,
+
+		// Parse host/port parameters into a sockaddr struct
+		AddrInfoBox requestAddr {};
+		int result = ParseAddress(hostname, port, 
+			&requestAddr.addrInfo, 
+			AF_UNSPEC);
+
+		if (result != 0) {
+			LogSocketError("getaddrinfo");
+			return false;
+		}
+
+		// Bind the socket with request parameters
+		result = bind(os->Socket,
 			os->LocalAddress->ai_addr,
 			(int)os->LocalAddress->ai_addrlen);
 
 		if (result == SOCKET_ERROR) {
 			LogSocketError("bind");
+			return false;
+		}
+
+		// Copy assigned ip/port tuple to the os struct
+		int namelen = sizeof(sockaddr);
+		result = getsockname(
+			os->Socket,
+			os->LocalAddress->ai_addr,
+			&namelen
+		);
+		os->LocalAddress->ai_addrlen = namelen;
+
+		if (result != 0) {
+			LogSocketError("getsockname");
 			return false;
 		}
 
@@ -409,7 +670,7 @@ namespace tftplib
 		LPFN_WSARECVMSG lpfnRcvMsg = nullptr;
 		DWORD bytesReturned = 0;
 
-		int result = WSAIoctl(os->ListenSocket,
+		int result = WSAIoctl(os->Socket,
 			SIO_GET_EXTENSION_FUNCTION_POINTER,
 			&GUID_RcvMsg, sizeof(GUID),
 			&lpfnRcvMsg, sizeof(lpfnRcvMsg),

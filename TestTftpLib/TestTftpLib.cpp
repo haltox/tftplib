@@ -8,10 +8,63 @@
 #include "UdpSocketWindows.h"
 #include "PoolOfBuffers.h"
 #include "DatagramFactory.h"
+#include "tftp_messages.h"
+#include <Winsock2.h>
+#include <ws2tcpip.h>
+#include <cstdint>
+#include <string>
+#include <Mswsock.h>
+#include <tchar.h>
+#include <combaseapi.h>
+
+#include <thread>
+#include <chrono>
+#include "Signal.h"
+
 
 int main()
 {
 	DebugManager::Init();
+
+	{
+		WSADATA wsaData;
+		if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+			throw std::runtime_error("WSAStartup failed");
+		}
+
+		addrinfo hints{};
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = SOCK_DGRAM;
+		hints.ai_protocol = IPPROTO_UDP;
+
+		std::string portStr = std::to_string(0);
+
+		addrinfo *address {0};
+
+		int result = getaddrinfo("::",
+			"0",
+			&hints,
+			&address);
+		
+		auto s = socket(AF_UNSPEC, SOCK_DGRAM, IPPROTO_UDP);
+		bind(s, address->ai_addr, address->ai_addrlen);
+
+		sockaddr resultAddr {0}; 
+		int namelen = sizeof(sockaddr);
+		result = getsockname(
+			s,
+			&resultAddr,
+			&namelen
+		);
+
+		std::cout << ((sockaddr_in*)&resultAddr)->sin_port << std::endl;
+
+
+		return result;
+	}
+
+
+	
 
     tftplib::Server server;
 
@@ -36,18 +89,6 @@ int main()
 		auto factory = tftplib::DatagramFactory::Instantiate();
 		auto datagram = socket.Receive(*factory);
 
-		if (datagram == nullptr) 
-		{
-			server.Out() << "Datagram is null" << std::endl;
-		}
-		else 
-		{
-			std::cout 
-				<< "from " << datagram->GetSourceAddress() << ":" << datagram->GetSourcePort()
-				<< " to " << datagram->GetDestAddress() << ":" << datagram->GetDestPort()
-				<< " with size " << datagram->GetDataSize() 
-				<< std::endl;
-		}
 	}
 
     std::cin.ignore();

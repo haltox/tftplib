@@ -6,6 +6,8 @@
 
 namespace tftplib
 {
+	class Datagram;
+
 	class DatagramFactory
 	{
 	public:
@@ -15,6 +17,9 @@ namespace tftplib
 		~DatagramFactory();
 
 		DatagramAssembly StartAssembly();
+		std::shared_ptr<Datagram> BuildResponse(const uint8_t *data, 
+			uint16_t len, 
+			const Datagram &respondTo);
 	
 		void Reclaim(Datagram &datagram);
 

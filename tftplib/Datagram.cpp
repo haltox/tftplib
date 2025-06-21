@@ -1,6 +1,7 @@
 ﻿#include "pch.h"
 #include "Datagram.h"
 #include "DatagramFactory.h"
+#include <bit>
 
 namespace tftplib {
 	
@@ -48,12 +49,12 @@ namespace tftplib {
 		return _isBroadcast;
 	}
 
-	const std::string Datagram::GetSourceAddress() const
+	const std::string &Datagram::GetSourceAddress() const
 	{
 		return _sourceAddress;
 	}
 
-	const std::string Datagram::GetDestAddress() const
+	const std::string &Datagram::GetDestAddress() const
 	{
 		return _destAddress;
 	}
@@ -92,4 +93,122 @@ namespace tftplib {
 	{
 		return _controlSize;
 	}
+
+
+/***************************************************************************
+ *	S T R E A M   W R I T E   O P E R A T O R S
+ ***************************************************************************/
+	
+	Datagram& Datagram::Write(const void* data, size_t size)
+	{
+		if ((size + _dataSize) > _dataBufferSize) {
+			return *this;
+		}
+
+		memcpy(&_data[_dataSize], data, size);
+		_dataSize += size;
+
+		return *this;
+	}
+	
+	Datagram& Datagram::operator<<(bool value)
+	{
+		_data[_dataSize++] = value ? 1 : 0;
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(uint8_t value)
+	{
+		_data[_dataSize++] = value;
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(uint16_t value)
+	{
+		_data[_dataSize++] = (value >> 1) & 0xFF;
+		_data[_dataSize++] = (value >> 0) & 0xFF;
+
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(uint32_t value)
+	{
+		_data[_dataSize++] = (value >> 3) & 0xFF;
+		_data[_dataSize++] = (value >> 2) & 0xFF;
+		_data[_dataSize++] = (value >> 1) & 0xFF;
+		_data[_dataSize++] = (value >> 0) & 0xFF;
+
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(uint64_t value)
+	{
+		_data[_dataSize++] = (value >> 7) & 0xFF;
+		_data[_dataSize++] = (value >> 6) & 0xFF;
+		_data[_dataSize++] = (value >> 5) & 0xFF;
+		_data[_dataSize++] = (value >> 4) & 0xFF;
+		_data[_dataSize++] = (value >> 3) & 0xFF;
+		_data[_dataSize++] = (value >> 2) & 0xFF;
+		_data[_dataSize++] = (value >> 1) & 0xFF;
+		_data[_dataSize++] = (value >> 0) & 0xFF;
+
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(int8_t value)
+	{
+		_data[_dataSize++] = value;
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(int16_t value)
+	{
+		_data[_dataSize++] = (value >> 1) & 0xFF;
+		_data[_dataSize++] = (value >> 0) & 0xFF;
+
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(int32_t value)
+	{
+		_data[_dataSize++] = (value >> 3) & 0xFF;
+		_data[_dataSize++] = (value >> 2) & 0xFF;
+		_data[_dataSize++] = (value >> 1) & 0xFF;
+		_data[_dataSize++] = (value >> 0) & 0xFF;
+
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(int64_t value)
+	{
+		_data[_dataSize++] = (value >> 7) & 0xFF;
+		_data[_dataSize++] = (value >> 6) & 0xFF;
+		_data[_dataSize++] = (value >> 5) & 0xFF;
+		_data[_dataSize++] = (value >> 4) & 0xFF;
+		_data[_dataSize++] = (value >> 3) & 0xFF;
+		_data[_dataSize++] = (value >> 2) & 0xFF;
+		_data[_dataSize++] = (value >> 1) & 0xFF;
+		_data[_dataSize++] = (value >> 0) & 0xFF;
+
+		return *this;
+	}
+
+	Datagram& Datagram::operator<<(const char* value)
+	{
+		if (value == nullptr) {
+			return *this;
+		}
+		
+		size_t len = strlen(value);
+		if (len + 1 > _dataBufferSize - _dataSize) {
+			return *this;
+		}
+
+		memcpy(_data + _dataSize, value, len);
+		_dataSize += static_cast<uint16_t>(len);
+		_data[_dataSize++] = '\0';
+
+		return *this;
+	}
+
 }

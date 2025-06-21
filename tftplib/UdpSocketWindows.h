@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <iostream>
+#include <atomic>
 
 namespace tftplib
 {
@@ -13,9 +14,19 @@ namespace tftplib
 	public:
 		enum State {
 			Inactive,
-			Bound
+			Binding,
+			Bound,
+			Unbinding
 		};
 
+		class GlobalOsContext {
+		public:
+			GlobalOsContext();
+			~GlobalOsContext();
+		};
+
+		static std::unique_ptr<GlobalOsContext> InitGlobalOsContext();
+		
 	public:
 		UdpSocketWindows();
 		~UdpSocketWindows();
@@ -26,8 +37,6 @@ namespace tftplib
 
 		UdpSocketWindows& SetOutStream(std::ostream* os);
 		UdpSocketWindows& SetErrStream(std::ostream* os);
-
-		bool Bind(const char* hostname, uint16_t port);
 
 		State GetState() const {
 			return _state;
@@ -43,11 +52,24 @@ namespace tftplib
 
 		uint16_t GetSocketPort() const;
 
+		bool IsIpv6() const;
+
+		std::string GetLocalAddress() const;
+
+		uint16_t GetLocalPort() const;
+
 		bool HasDatagram() const;
 
-		std::shared_ptr<tftplib::Datagram> Receive(DatagramFactory &factory);
+		bool Poll(uint32_t timeout = 0) const;
 
-		bool IsIpv6() const;
+		bool Bind(const char* hostname, uint16_t port = 0);
+
+		bool Unbind();
+
+		std::shared_ptr<tftplib::Datagram> Receive(DatagramFactory &factory);
+		
+		bool Send(std::shared_ptr<tftplib::Datagram> datagram);
+
 	private:
 		struct OsSpecific;
 
@@ -60,26 +82,28 @@ namespace tftplib
 			return _err ? *_err : std::cerr;
 		}
 
-		void InitWSA();
+		std::shared_ptr<OsSpecific> Os() const;
 
-		bool PrepareOSAddress(const char* hostname,
-			uint16_t port,
-			OsSpecific* os);
 		bool CreateSocket(OsSpecific* os);
 		bool SetSocketOptions(OsSpecific* os);
-		bool BindSocket(OsSpecific* os);
+		bool BindSocket(const char* hostname,
+			uint16_t port, 
+			OsSpecific* os);
 
 		bool InitRecvMsg(OsSpecific* os);
 
 		void LogSocketError(const char* what) const;
 
+	private:
+
 		std::ostream* _out;
 		std::ostream* _err;
 
-	private:
-		State _state;
-		std::unique_ptr<OsSpecific> _os;
-
+		std::atomic<State> _state;
+		mutable std::atomic<int> _activityCounter {0};
+		
+		std::shared_ptr<OsSpecific> _osLifeCycle;
+		std::weak_ptr<OsSpecific> _osHandle;
 	};
 
 }
