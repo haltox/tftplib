@@ -49,7 +49,7 @@ namespace tftplib
 	private:
 		bool ValidateConfiguration() const;
 
-		void DispatchJob();
+		void MainServerThread();
 
 		bool IsHandlingMaxTransactions() const;
 
@@ -73,6 +73,13 @@ namespace tftplib
 		// Reply functions
 		void ReplyRejectTransactionNoWorkerAvailable(const Datagram& transactionRequest);
 
+	private:
+		struct TransactionRecord {
+			size_t socketId;
+			
+			uint16_t clientTID;
+			uint16_t serverTID;
+		};
 
 	private:
 
@@ -96,15 +103,15 @@ namespace tftplib
 		std::shared_ptr<Allocator> _alloc;
 		std::shared_ptr<DatagramFactory> _factory {nullptr};
 
-		UdpSocketWindows _socket {};
+		UdpSocketWindows _controlSocket {};
+		std::vector< std::shared_ptr<UdpSocketWindows>> _transactionSockets {};
+
 		std::thread _dispatchThread {};
 		std::vector<std::shared_ptr<ServerWorker>> _workers;
-		std::unordered_map<std::string, uint32_t> _transactions {};
+		std::unordered_map<uint64_t, TransactionRecord> _transactions {};
 		std::atomic<bool> _running{ false };
 		std::atomic<bool> _starting{ false };
 		std::atomic<bool> _stopping{ false };
-
-		std::mutex _mutex {};
 
 		friend class ServerWorker;
 	};

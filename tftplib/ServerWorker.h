@@ -8,6 +8,7 @@
 #include "RingBuffer.h"
 #include "Signal.h"
 #include <ostream>
+#include "UdpSocketWindows.h"
 
 namespace tftplib {
 	class Server;
@@ -58,7 +59,9 @@ namespace tftplib {
 		void Stop();
 
 		// Transaction handling
-		void AssignTransaction(uint16_t requestId);
+		void AssignTransaction(uint16_t clientTid, 
+			uint16_t serverTid, 
+			std::shared_ptr<UdpSocketWindows> socket );
 
 		bool IsBusy() const;
 
@@ -84,7 +87,8 @@ namespace tftplib {
 		// Transaction state handling
 		std::atomic<ActivityState> _activity {ActivityState::INACTIVE};
 		std::atomic<TransactionState> _state { TransactionState::INACTIVE };
-		uint16_t _transactionId {0};
+		uint16_t _clientTid {0};
+		uint16_t _serverTid{ 0 };
 		uint16_t _lastAck {0};
 
 		Server &_parent;

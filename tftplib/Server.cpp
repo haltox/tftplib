@@ -61,16 +61,19 @@ namespace tftplib {
 
 		_factory = DatagramFactory::Instantiate(_threadCount * 8);
 		_alloc = std::make_shared<Allocator>(_messagePoolSize);
-		_socket.Bind(_host.c_str(), _port);
+		_controlSocket.Bind(_host.c_str(), _port);
 
 		for (uint32_t i = 0; i < _threadCount; i++)
 		{
+			auto socket = std::make_shared<UdpSocketWindows>();
+			_transactionSockets.push_back(socket);
+
 			auto worker = std::make_shared<ServerWorker>(*this);
 			worker->Start();
 			_workers.push_back(worker);
 		}
 
-		_dispatchThread = std::thread(&Server::DispatchJob, this);
+		_dispatchThread = std::thread(&Server::MainServerThread, this);
 
 		_starting = false;
 	}
@@ -103,11 +106,16 @@ namespace tftplib {
 				worker->Stop();
 			}
 
-			_socket.Unbind();
+			for (auto& socket : _transactionSockets) {
+				socket->Unbind();
+			}
+
+			_controlSocket.Unbind();
 			_alloc = nullptr;
 			_factory = nullptr;
 
 			_workers.clear();
+			_transactionSockets.clear();
 			_transactions.clear();
 		}
 
@@ -115,34 +123,26 @@ namespace tftplib {
 		_stopping = false;
 	}
 
-	void Server::DispatchJob()
+	void Server::MainServerThread()
 	{
 		_running = true;
 
 		while (!_stopping)
 		{
-			while (!_socket.Poll(100) && !_stopping) ;
+			while (!_controlSocket.Poll(100) && !_stopping) ;
 
 			if (_stopping) {
 				break;
 			}
 
-			std::shared_ptr<Datagram> datagram = _socket.Receive(*_factory);
+			std::shared_ptr<Datagram> datagram = _controlSocket.Receive(*_factory);
 			if (datagram == nullptr || !datagram->IsValid()) {
 				Err() << "Received invalid datagram or out of buffers. Waiting a bit." << std::endl;
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 				continue;
 			}
 
-			std::string transactionKey {MakeTransactionKey(*datagram)};
-			auto it = _transactions.find(transactionKey);
-			if (it == _transactions.end() ) {
-				ProcessNewTransactionRequest(datagram);
-			}
-			else {
-				auto worker = _workers[it->second];
-				DispatchMessageToWorker(datagram, *worker);
-			}
+			ProcessNewTransactionRequest(datagram);
 		}
 
 		_running = false;
@@ -219,27 +219,49 @@ namespace tftplib {
 			message->Size(),
 			transactionRequest);
 
-		_socket.Send(response);
+		_controlSocket.Send(response);
 	}
 
 	std::shared_ptr<ServerWorker> 
 	Server::AssignWorkerToTransaction(const std::string& host, uint16_t requestId)
 	{
-		std::lock_guard<std::mutex> lock{ _mutex };
+		size_t freeSocket = 0;
+		std::shared_ptr<UdpSocketWindows> socket = nullptr;
+		for( ; freeSocket < _transactionSockets.size(); freeSocket++ )
+		{
+			socket = _transactionSockets[freeSocket];
+			if (!socket->IsBound())
+			{
+				socket->Bind(_host.c_str(), 0);
+				break;
+			}
+		}
 
-		std::string transactionKey{ host, requestId };
+		if (socket == nullptr) 
+		{
+			Err() << "Couldn't find free socket for incoming transaction!" << std::endl;
+			return nullptr;
+		}
+
+		uint64_t key = (((uint64_t)requestId) << 32) + socket->GetLocalPort();
 		for (size_t i = 0; i < _workers.size(); ++i)
 		{
 			if ( !_workers[i]->IsBusy()) {
-				_workers[i]->AssignTransaction(requestId);
-				_transactions[transactionKey] = i;
+				_workers[i]->AssignTransaction(requestId, 
+					socket->GetLocalPort(), 
+					socket);
+
+				_transactions[key] = { 
+					freeSocket, 
+					requestId, 
+					socket->GetLocalPort()};
 				return _workers[i];
 			}
 		}
 
-		// Shouldn't happen.
+		// Shouldn't happen.w
 		Err()  << "No available worker to handle transaction : "
-			<< transactionKey
+			<< key
 			<< std::endl;
 
 		return nullptr;

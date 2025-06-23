@@ -46,14 +46,18 @@ namespace tftplib {
 	}
 
 	// Transaction handling
-	void ServerWorker::AssignTransaction(uint16_t requestId)
+	void ServerWorker::AssignTransaction(uint16_t clientTid,
+		uint16_t serverTid,
+		std::shared_ptr<UdpSocketWindows> socket)
 	{
 		{
 			TransactionState expected{ TransactionState::WAITING_FOR_REQUEST };
 			TransactionState desired{ TransactionState::SETTING_UP_REQUEST };
 			if (!_state.compare_exchange_strong(expected, desired))
 			{
-				Err() << "AssignTransaction(" << requestId << ") called while : ";
+				Err() << "AssignTransaction(" 
+					<< clientTid << "," << serverTid 
+					<< ") called while : ";
 				if (expected == TransactionState::INACTIVE)
 				{
 					Err() << "worker is inactive" << std::endl;
@@ -65,7 +69,7 @@ namespace tftplib {
 				else
 				{
 					Err() << "worker is handling transaction " 
-						<< _transactionId 
+						<< _clientTid << "/" << _serverTid
 						<< std::endl;
 				}
 				return;
@@ -73,7 +77,8 @@ namespace tftplib {
 		}
 
 		_lastAck = 0;
-		_transactionId = requestId;
+		_clientTid = clientTid;
+		_serverTid = serverTid;
 		
 		TransactionState expected { TransactionState::SETTING_UP_REQUEST };
 		TransactionState desired{ TransactionState::PROCESSING_REQUEST };
