@@ -9,10 +9,15 @@
 #include "Signal.h"
 #include <ostream>
 #include "UdpSocketWindows.h"
+#include "DatagramFactory.h"
+#include <filesystem>
+#include "tftp_messages.h"
+#include "FileSecurityHandler.h"
 
 namespace tftplib {
 	class Server;
-	
+	class MessageRequest;
+
 	class ServerWorker
 	{
 	public:
@@ -34,13 +39,13 @@ namespace tftplib {
 			SETTING_UP_REQUEST,			// Setting up state for request handling
 
 			PROCESSING_REQUEST,			// Worker thread is processing 
-			// a transaction request
+										// a transaction request
 
 			WAITING_FOR_DATA,			// Worker thread is waiting for data 
-			// from the client
+										// from the client
 
 			WAITING_FOR_ACK,			// Worker thread is waiting for ACK from 
-			// the client
+										// the client
 
 			TERMINATING					// Worker thread is shutting down
 										// Will transition to inactive.
@@ -49,7 +54,8 @@ namespace tftplib {
 
 	public:
 		
-		ServerWorker(Server &parent);
+		ServerWorker(Server &parent, 
+			std::weak_ptr<DatagramFactory> factory);
 
 		// Thread handling
 		void Start();
@@ -59,16 +65,40 @@ namespace tftplib {
 		void Stop();
 
 		// Transaction handling
-		void AssignTransaction(uint16_t clientTid, 
-			uint16_t serverTid, 
+		void AssignTransaction(std::shared_ptr<Datagram>& transactionRequest,
 			std::shared_ptr<UdpSocketWindows> socket );
 
 		bool IsBusy() const;
 
-		bool DispatchMessage(const std::shared_ptr<Datagram> &message);
-
 		std::ostream& Out();
 		std::ostream& Err();
+
+	private:
+	
+		enum class MessageErrorCategory
+		{
+			NO_ERROR,
+
+			// State and operation sequencing errors
+			INVALID_STATE,
+			INVALID_OPCODE,
+			
+			// Message structure errors
+			INVALID_MESSAGE_SIZE,
+			INVALID_MESSAGE_FORMAT,
+			
+			// Message error
+			INVALID_MODE,
+
+			// File errors
+			NO_SUCH_FILE,
+			ACCESS_FORBIDDEN,
+			FILE_LOCKED,
+			UNSAFE_PATH,
+
+			// Critical server error - abort processing.
+			CRITICAL_SERVER_ERROR
+		};
 
 	private:
 		void Run();
@@ -78,21 +108,91 @@ namespace tftplib {
 		void TryProcessMessage();
 		void ProcessTick();
 
+		/* ***************************************************
+		 *  Message Processing : RRQ and WRQ
+		 * ***************************************************/
+		
+		void ProcessRequestMessage(
+			std::shared_ptr<Datagram>& transactionRequest );
+		
+		MessageErrorCategory ProcessRequestMessage(
+			const MessageRequest* rwrq);
+
+		void RejectTransactionRequest(MessageErrorCategory errorReason);
+
+		/* ***************************************************
+		 *  General state and message handling
+		 * ***************************************************/
+
+		bool Ack(uint16_t ack);
+
+		bool Error(ErrorCode errorCode);
+
+		bool SendMessage(std::shared_ptr<Datagram> &datagram);
+
+		/* ***************************************************
+		 *  General utility functions
+		 * ***************************************************/
+
+		MessageErrorCategory 
+		FileSecurityErrorToMessageError(
+			FileSecurityHandler::ValidationResult fse) const;
+
+
+		template<typename T, typename... Args>
+		std::shared_ptr<Datagram>
+		MakeMessageDatagram(std::weak_ptr<DatagramFactory>& factoryHandle,
+				Args... args);
+
 	private:
 		std::thread _thread {};
 		Signal _signal{};
 
-		RingBuffer<std::shared_ptr<Datagram>> _messages;
-
-		// Transaction state handling
+		// State handling
 		std::atomic<ActivityState> _activity {ActivityState::INACTIVE};
 		std::atomic<TransactionState> _state { TransactionState::INACTIVE };
+
+		// Transaction settings
+		std::string _clientHost {""};
 		uint16_t _clientTid {0};
 		uint16_t _serverTid{ 0 };
 		uint16_t _lastAck {0};
 
+		std::filesystem::path _filePath {""};
+		bool _asciiMode {false};
+
+		std::shared_ptr<UdpSocketWindows> _socket{nullptr};
+
 		Server &_parent;
+		std::weak_ptr<DatagramFactory> _factory;
 	};
 }
 
+namespace tftplib {
+	template<typename T, typename... Args>
+	std::shared_ptr<Datagram>
+	ServerWorker::MakeMessageDatagram(std::weak_ptr<DatagramFactory>& factoryHandle,
+		Args... args)
+	{
+		auto factory = factoryHandle.lock();
+		if (!factory) return nullptr;
+
+		auto assembly = factory->StartAssembly()
+			.SetDestinationAddress(_clientHost)
+			.SetDestinationPort(_clientTid);
+
+		T* message = T::create(args...,
+			[&assembly](size_t sz) {
+				assembly.SetDataSize(static_cast<uint16_t>(sz));
+				return assembly.GetDataBuffer();
+			});
+
+		if (message == nullptr)
+		{
+			return nullptr;
+		}
+
+		return assembly.Finalize();
+	}
+}
 

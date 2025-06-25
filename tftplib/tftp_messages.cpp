@@ -4,6 +4,47 @@
 
 namespace tftplib {
 
+	int strLenS(const char* str, uint16_t maxSz) {
+		int sz = 0;
+		while (*str++ && maxSz--) {
+			sz++;
+		}
+
+		if (*(str - 1)) return -1;
+		return sz;
+	}
+
+	mode::Mode mode::StrToEnum(const char* str) {
+		if (str == nullptr) return mode::Mode::UNDEFINED;
+
+		if (strcmp(str, mode::NETASCII) == 0)
+		{
+			return mode::Mode::NETASCII;
+		}
+		if (strcmp(str, mode::OCTET) == 0)
+		{
+			return mode::Mode::OCTET;
+		}
+		if (strcmp(str, mode::MAIL) == 0)
+		{
+			return mode::Mode::MAIL;
+		}
+
+		return mode::Mode::UNDEFINED;
+	}
+
+	const char* OpCodeToStr(OpCode op) {
+		switch (op) {
+		case OpCode::RRQ:	return "RRQ";
+		case OpCode::WRQ:	return "WRQ";
+		case OpCode::DATA:	return "DATA";
+		case OpCode::ACK:	return "ACK";
+		case OpCode::ERROR:	return "ERROR";
+		case OpCode::OACK:	return "OACK";
+		default:			return "[unknown]";
+		}
+	}
+
 	MessageError* MessageError::create(ErrorCode errorCode,
 		std::function<void* (size_t)> allocator,
 		const char* customErrorMessage)
@@ -76,6 +117,52 @@ namespace tftplib {
 		std::function<void* (size_t)> allocator)
 	{
 		return createRequest(OpCode::WRQ, filename, mode, allocator);
+	}
+
+	mode::Mode MessageRequest::getMode() const {
+		return mode::StrToEnum(getModeStr());
+	}
+
+	const char* MessageRequest::getFilenameS(uint16_t messageSz) const {
+		uint16_t dataSize = messageSz - sizeof(OpCode);
+		if (strLenS(filenameAndMode, dataSize) == -1) {
+			return nullptr;
+		}
+
+		return filenameAndMode;
+	}
+
+	const char* MessageRequest::getModeStrS(uint16_t messageSz) const {
+		uint16_t dataSize = messageSz - sizeof(OpCode);
+		int filenameLen = strLenS(filenameAndMode, dataSize);
+
+		if (filenameLen == -1 || filenameLen + 2 > dataSize) {
+			return nullptr;
+		}
+
+		dataSize -= (filenameLen + 1);
+		const char* modeStr = filenameAndMode + (filenameLen + 1);
+		if (strLenS(modeStr, dataSize) == -1) {
+			return nullptr;
+		}
+
+		return modeStr;
+	}
+
+	mode::Mode MessageRequest::getModeS(uint16_t messageSz) const {
+		return mode::StrToEnum(getModeStrS(messageSz));
+	}
+
+	size_t MessageRequest::Size() const {
+		return sizeof(MessageRequest) + strlen(filenameAndMode)
+			+ strlen(getModeStr());
+	}
+
+	bool MessageRequest::Validate(uint16_t messageSz) const {
+		return getFilenameS(messageSz) != nullptr
+			&& getModeStrS(messageSz) != nullptr
+			&& getMode() != mode::Mode::MAIL
+			&& getMode() != mode::Mode::UNDEFINED;
 	}
 
 	MessageData* MessageData::create(uint16_t number,

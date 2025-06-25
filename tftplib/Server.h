@@ -15,6 +15,8 @@
 #include <unordered_map>
 
 #include <mutex>
+#include "FileSecurityHandler.h"
+
 
 namespace tftplib
 {
@@ -46,6 +48,9 @@ namespace tftplib
 
 		std::ostream& Out() const;
 		std::ostream& Err() const;
+
+		FileSecurityHandler &FileSecurity();
+
 	private:
 		bool ValidateConfiguration() const;
 
@@ -54,15 +59,10 @@ namespace tftplib
 		bool IsHandlingMaxTransactions() const;
 
 		void ProcessNewTransactionRequest(
-			std::shared_ptr<Datagram> transactionRequest);
+			std::shared_ptr<Datagram> &transactionRequest);
 
 		std::shared_ptr<ServerWorker> AssignWorkerToTransaction(
-			const std::string &host,
-			uint16_t requestId);
-
-		void DispatchMessageToWorker(
-			std::shared_ptr<Datagram> message, 
-			ServerWorker& worker);
+			std::shared_ptr<Datagram>& transactionRequest);
 
 		std::string MakeTransactionKey(
 			const std::string& host,
@@ -102,6 +102,8 @@ namespace tftplib
 		std::unique_ptr<UdpSocketWindows::GlobalOsContext> _osContext;
 		std::shared_ptr<Allocator> _alloc;
 		std::shared_ptr<DatagramFactory> _factory {nullptr};
+		
+		FileSecurityHandler _fileSecurity;
 
 		UdpSocketWindows _controlSocket {};
 		std::vector< std::shared_ptr<UdpSocketWindows>> _transactionSockets {};

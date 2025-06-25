@@ -5,12 +5,12 @@
 
 namespace tftplib {
 	
-	Datagram::Datagram(Datagram&& rhs)
+	Datagram::Datagram(Datagram&& rhs) noexcept
 	{
 		*this = std::move(rhs);
 	}
 
-	Datagram& Datagram::operator=(Datagram&& rhs)
+	Datagram& Datagram::operator=(Datagram&& rhs) noexcept
 	{
 		std::swap(_valid, rhs._valid);
 		std::swap(_isBroadcast, rhs._isBroadcast);
@@ -106,7 +106,7 @@ namespace tftplib {
 		}
 
 		memcpy(&_data[_dataSize], data, size);
-		_dataSize += size;
+		_dataSize += static_cast<uint16_t>(size);
 
 		return *this;
 	}

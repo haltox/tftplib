@@ -64,8 +64,10 @@ namespace tftplib {
 	bool
 	DatagramFactory::InitializeDatagramBuffers(Datagram& datagram)
 	{
-		datagram._dataBufferSize = _poolOfDatagram.BufferSize();
-		datagram._controlBufferSize = _poolOfControlData.BufferSize();
+		datagram._dataBufferSize = 
+			static_cast<uint16_t>(_poolOfDatagram.BufferSize());
+		datagram._controlBufferSize = 
+			static_cast<uint16_t>(_poolOfControlData.BufferSize());
 		datagram._data = _poolOfDatagram.Alloc();
 		datagram._controlBuffer = _poolOfControlData.Alloc();
 

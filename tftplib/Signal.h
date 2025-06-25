@@ -14,6 +14,8 @@ namespace tftplib {
 		template< class Rep, class Period >
 		bool WaitForSignal(const std::chrono::duration<Rep, Period>& rel_time);
 
+		void Reset();
+
 	private:
 		std::binary_semaphore _bell{ 0 };
 		std::binary_semaphore _mallet{ 1 };

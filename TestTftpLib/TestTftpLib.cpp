@@ -22,9 +22,39 @@
 #include "Signal.h"
 
 
+int strLenS(const char* str, uint16_t maxSz) {
+	int sz = 0;
+	while (*str++ && maxSz--) {
+		sz++;
+	}
+
+	if (*(str-1)) return -1;
+	return sz;
+}
+
 int main()
 {
 	DebugManager::Init();
+
+	{
+		std::filesystem::path p1 {"/a/b/c"};
+		std::filesystem::path p2{ "/a/b/c/d" };
+		std::filesystem::path p3{ "/a/b" };
+		std::filesystem::path p4{ "/a/c/c" };
+
+		std::cout << 
+			std::filesystem::absolute(p1).compare(std::filesystem::absolute(p2))
+		<< std::endl;
+
+		std::cout <<
+			std::filesystem::absolute(p1).compare(std::filesystem::absolute(p3))
+			<< std::endl;
+
+		std::cout <<
+			std::filesystem::absolute(p1).compare(std::filesystem::absolute(p4))
+			<< std::endl;
+
+	}
 
 	{
 		WSADATA wsaData;

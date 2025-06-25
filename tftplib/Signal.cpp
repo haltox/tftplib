@@ -16,3 +16,9 @@ bool tftplib::Signal::WaitForSignal()
 	return true;
 }
 
+void tftplib::Signal::Reset()
+{
+	(void)_bell.try_acquire();
+	(void)_mallet.try_acquire();
+	_mallet.release();
+}

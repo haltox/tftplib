@@ -18,8 +18,8 @@ namespace tftplib
 		Datagram& operator=(const Datagram&) = delete;
 		
 		// Move does make sense
-		Datagram(Datagram&&);
-		Datagram& operator=(Datagram&&);
+		Datagram(Datagram&&) noexcept;
+		Datagram& operator=(Datagram&&) noexcept;
 		~Datagram();
 
 		bool IsValid() const;

@@ -17,8 +17,8 @@ namespace tftplib {
 	public:
 		Allocator(size_t bufSz);
 		~Allocator();
-		Allocator(Allocator&&);
-		Allocator& operator=(Allocator&&);
+		Allocator(Allocator&&) noexcept;
+		Allocator& operator=(Allocator&&) noexcept;
 
 		Allocator(const Allocator&) = delete;
 		Allocator& operator=(const Allocator&) = delete;

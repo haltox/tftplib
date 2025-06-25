@@ -23,6 +23,8 @@ namespace tftplib
 		OACK	= IS_BIG_ENDIAN ? 0x0006 : 0x0600	// Option Acknowledgment
 	};
 
+	const char* OpCodeToStr(OpCode op);
+
 	namespace mode {
 		static const char* NETASCII = "netascii";	// Text mode
 		static const char* OCTET = "octet";			// Binary mode
@@ -45,6 +47,8 @@ namespace tftplib
 
 			LAST = MAIL								// Last valid mode
 		};
+
+		Mode StrToEnum(const char* str);
 	};
 
 	enum class ErrorCode : uint16_t {
@@ -130,17 +134,37 @@ namespace tftplib
 		OpCode getMessageCode() const {
 			return opcode;
 		}
+		
 		const char* getFilename() const {
 			return filenameAndMode;
 		}
-		const char* getMode() const {
+
+		const char* getModeStr() const {
 			return filenameAndMode + strlen(filenameAndMode) + 1;
 		}
 
-		size_t Size() const {
-			return sizeof(MessageRequest) + strlen(filenameAndMode)
-				+ strlen(getMode());
-		}
+		mode::Mode getMode() const;
+
+		// 'Safe' variant of the accessors.
+		// Those functions make sure they do not read past the end of the buffer.
+		// Those functions and those functions only should be called on 
+		// incoming requests that haven't been validated.
+		const char* getFilenameS(uint16_t messageSz) const;
+		const char* getModeStrS(uint16_t messageSz) const;
+
+		mode::Mode getModeS(uint16_t messageSz) const;
+
+		// Return the buffer size required to acommodate this request.
+		size_t Size() const;
+
+		// Validate the request.
+		//	Possible failure scenarios : 
+		//		- Malformed request
+		//			i.e. filename and/or mode aren't properly formatted within 
+		//			buffer
+		//		- Mode is undefined, unknown or could not be parsed.
+		//		- Mode is MAIl. RFC1350 tells us not to support this mode of operation.
+		bool Validate(uint16_t messageSz) const;
 	};
 
 	class MessageData {

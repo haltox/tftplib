@@ -59,6 +59,11 @@ namespace tftplib {
 			throw std::runtime_error("Invalid server configuration");
 		}
 
+		_fileSecurity.Reset()
+			.SetFileCreationPolicy(FileSecurityHandler::FileCreationPolicy::ALLOW)
+			.SetOverwritePolicy(FileSecurityHandler::OverwritePolicy::ALLOW)
+			.SetRootDirectory(_rootDirectory);
+
 		_factory = DatagramFactory::Instantiate(_threadCount * 8);
 		_alloc = std::make_shared<Allocator>(_messagePoolSize);
 		_controlSocket.Bind(_host.c_str(), _port);
@@ -68,7 +73,7 @@ namespace tftplib {
 			auto socket = std::make_shared<UdpSocketWindows>();
 			_transactionSockets.push_back(socket);
 
-			auto worker = std::make_shared<ServerWorker>(*this);
+			auto worker = std::make_shared<ServerWorker>(*this, _factory);
 			worker->Start();
 			_workers.push_back(worker);
 		}
@@ -150,32 +155,25 @@ namespace tftplib {
 
 	void 
 	Server::ProcessNewTransactionRequest(
-		std::shared_ptr<Datagram> transactionRequest)
+		std::shared_ptr<Datagram> &transactionRequest)
 	{
-		uint16_t port = transactionRequest->GetSourcePort();
-		std::string host = transactionRequest->GetSourceAddress();
-
 		// Check if we are handling max transactions
 		if (IsHandlingMaxTransactions()) {
 			Err() << "Rejecting transaction from "
 				<< transactionRequest->GetSourceAddress() 
 				<< ":" 
-				<< port
+				<< transactionRequest->GetSourcePort()
 				<< " due to max transactions limit." 
 				<< std::endl;
 			
 			ReplyRejectTransactionNoWorkerAvailable(*transactionRequest);
 		}
 		else {
-			auto worker = AssignWorkerToTransaction(host, port);
+			auto worker = AssignWorkerToTransaction(transactionRequest);
 
 			if (worker == nullptr) 
 			{
 				ReplyRejectTransactionNoWorkerAvailable(*transactionRequest);
-			}
-			else
-			{
-				DispatchMessageToWorker(transactionRequest, *worker);
 			}
 		}
 	}
@@ -216,14 +214,15 @@ namespace tftplib {
 
 		auto response = _factory->BuildResponse(
 			(const uint8_t*)message.get(),
-			message->Size(),
+			static_cast<uint16_t>(message->Size()),
 			transactionRequest);
 
 		_controlSocket.Send(response);
 	}
 
 	std::shared_ptr<ServerWorker> 
-	Server::AssignWorkerToTransaction(const std::string& host, uint16_t requestId)
+	Server::AssignWorkerToTransaction(
+		std::shared_ptr<Datagram>& transactionRequest)
 	{
 		size_t freeSocket = 0;
 		std::shared_ptr<UdpSocketWindows> socket = nullptr;
@@ -243,18 +242,19 @@ namespace tftplib {
 			return nullptr;
 		}
 
-		uint64_t key = (((uint64_t)requestId) << 32) + socket->GetLocalPort();
+		uint64_t clientTid = transactionRequest->GetSourcePort();
+		uint64_t serverTid = socket->GetLocalPort();
+		uint64_t key = (clientTid << 32) | serverTid;
 		for (size_t i = 0; i < _workers.size(); ++i)
 		{
 			if ( !_workers[i]->IsBusy()) {
-				_workers[i]->AssignTransaction(requestId, 
-					socket->GetLocalPort(), 
-					socket);
+				_workers[i]->AssignTransaction(transactionRequest, socket);
 
 				_transactions[key] = { 
 					freeSocket, 
-					requestId, 
-					socket->GetLocalPort()};
+					transactionRequest->GetSourcePort(),
+					socket->GetLocalPort()
+				};
 				return _workers[i];
 			}
 		}
@@ -265,14 +265,6 @@ namespace tftplib {
 			<< std::endl;
 
 		return nullptr;
-	}
-
-	void 
-	Server::DispatchMessageToWorker(
-		std::shared_ptr<Datagram> message, 
-		ServerWorker& worker)
-	{
-		worker.DispatchMessage(message);
 	}
 
 	// Setters for server configuration
@@ -341,5 +333,10 @@ namespace tftplib {
 
 	std::ostream& Server::Err() const {
 		return _err != nullptr ? *_err : _noopOstream;
+	}
+
+	FileSecurityHandler& Server::FileSecurity()
+	{
+		return _fileSecurity;
 	}
 };

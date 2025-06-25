@@ -142,6 +142,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Allocator.h" />
+    <ClInclude Include="FileSecurityHandler.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PoolOfBuffers.h" />
@@ -149,6 +150,7 @@
     <ClInclude Include="DatagramAssembly.h" />
     <ClInclude Include="DatagramFactory.h" />
     <ClInclude Include="RingBuffer.h" />
+    <ClInclude Include="RWInterlock.h" />
     <ClInclude Include="Server.h" />
     <ClInclude Include="ServerWorker.h" />
     <ClInclude Include="Signal.h" />
@@ -158,6 +160,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Allocator.cpp" />
+    <ClCompile Include="FileSecurityHandler.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
@@ -167,6 +170,7 @@
     <ClCompile Include="Datagram.cpp" />
     <ClCompile Include="DatagramAssembly.cpp" />
     <ClCompile Include="DatagramFactory.cpp" />
+    <ClCompile Include="RWInterlock.cpp" />
     <ClCompile Include="Server.cpp" />
     <ClCompile Include="ServerWorker.cpp" />
     <ClCompile Include="Signal.cpp" />

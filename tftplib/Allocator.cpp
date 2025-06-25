@@ -20,12 +20,12 @@ namespace tftplib {
 		delete[] _buffer;
 	}
 
-	Allocator::Allocator(Allocator&& rhs)
+	Allocator::Allocator(Allocator&& rhs) noexcept
 	{
 		*this = std::move(rhs);
 	}
 
-	Allocator& Allocator::operator=(Allocator&& rhs)
+	Allocator& Allocator::operator=(Allocator&& rhs) noexcept
 	{
 		std::swap(_buffer, rhs._buffer);
 		std::swap(_bufferSize, rhs._bufferSize);
@@ -83,7 +83,7 @@ namespace tftplib {
 		if( sz >= MaxBlockSize ) return 0;
 
 		size_t bw = std::bit_width(sz);
-		size_t bs = 1u << bw;
+		size_t bs = 1ull << bw;
 
 		return std::max(bs, MinBlockSize);
 	}

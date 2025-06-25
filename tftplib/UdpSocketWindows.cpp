@@ -540,7 +540,8 @@ namespace tftplib
 			&buffer, 1,
 			&sentBytes,
 			0,
-			boxed.addrInfo->ai_addr, boxed.addrInfo->ai_addrlen,
+			boxed.addrInfo->ai_addr, 
+			static_cast<int>(boxed.addrInfo->ai_addrlen),
 			nullptr, nullptr
 		);
 
