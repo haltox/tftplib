@@ -83,9 +83,9 @@ namespace tftplib
 		}
 
 		std::shared_ptr<OsSpecific> Os() const;
-
-		bool CreateSocket(OsSpecific* os);
-		bool SetSocketOptions(OsSpecific* os);
+		
+		bool CreateSocket(OsSpecific* os, bool isIpv6);
+		bool SetSocketOptions(OsSpecific* os, bool isIpv6);
 		bool BindSocket(const char* hostname,
 			uint16_t port, 
 			OsSpecific* os);
@@ -93,6 +93,7 @@ namespace tftplib
 		bool InitRecvMsg(OsSpecific* os);
 
 		void LogSocketError(const char* what) const;
+
 
 	private:
 

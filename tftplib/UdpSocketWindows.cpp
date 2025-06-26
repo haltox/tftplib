@@ -26,15 +26,14 @@ namespace tftplib
 	 */
 	struct UdpSocketWindows::OsSpecific 
 	{
-		addrinfo* LocalAddress{ nullptr };
+		sockaddr LocalAddress {0};
 		SOCKET Socket{};
 		LPFN_WSARECVMSG fnRcvMsg{ nullptr };
 
+		OsSpecific() {
+		}
+
 		~OsSpecific() {
-			if (LocalAddress) {
-				freeaddrinfo(LocalAddress);
-				LocalAddress = nullptr;
-			}
 			if (Socket != INVALID_SOCKET) {
 				closesocket(Socket);
 				Socket = INVALID_SOCKET;
@@ -97,6 +96,72 @@ namespace tftplib
 	UdpSocketWindows::GlobalOsContext::~GlobalOsContext() {
 		WSACleanup();
 	}
+
+	/*
+	 * class ProviderList
+	 *		Query list of provider and manage required buffers
+	 */
+
+	class ProviderList
+	{
+	private:
+		uint32_t _count {0};
+		uint8_t *_buffer{ nullptr };
+		WSAPROTOCOL_INFO *_listOfProviders {nullptr};
+
+	private:
+		size_t RequiredBufferSize() 
+		{
+			DWORD bufSize = 0;
+			WSAEnumProtocols(nullptr, nullptr, &bufSize);
+			return bufSize;
+		}
+
+		void QueryProviders(WSAPROTOCOL_INFO* list, uint32_t bufferSize)
+		{
+			DWORD bufSz = bufferSize;
+			auto result = WSAEnumProtocols(nullptr, list, &bufSz);
+
+			if (result != SOCKET_ERROR)
+			{
+				_count = result;
+			}
+		}
+
+	public:
+		ProviderList()
+		{
+			_buffer = new uint8_t[RequiredBufferSize()];
+			_listOfProviders = (WSAPROTOCOL_INFO *)_buffer;
+
+		}
+
+		~ProviderList()
+		{
+			delete[] _buffer;
+		}
+
+		WSAPROTOCOL_INFO* FindProvider(bool ipv6)
+		{
+			int af = ipv6 ? AF_INET6 : AF_INET;
+			for (int i = 0; i < _count; i++)
+			{
+				WSAPROTOCOL_INFO* provider = &_listOfProviders[i];
+				if (provider->dwServiceFlags1 & XP1_CONNECTIONLESS
+					&& provider->iProtocol == IPPROTO_UDP 
+					&& provider->iAddressFamily == af)
+				{
+					std::wstring proto { provider->szProtocol};
+					if (proto.starts_with(L"MSAFD"))
+					{
+						return provider;
+					}
+				}
+			}
+
+			return nullptr;
+		}
+	};
 
 /***************************************************************************
  *	F I L E   L O C A L   S T A T I C   F U N C T I O N S
@@ -182,6 +247,19 @@ namespace tftplib
 		return ParseAddress(hostname.c_str(), port, address, addressFamily);
 	}
 	
+	
+	/*
+	 * Identify whether an addr is ipv6 formatted.
+	 */
+	bool
+	IsHostnameIpv6(const char* hostname)
+	{
+		AddrInfoBox addr;
+
+		ParseAddress(hostname, 0, &addr.addrInfo, AF_UNSPEC);
+		return addr.addrInfo->ai_family == AF_INET6;
+	}
+
 /***************************************************************************
  *	C L A S S   S T A T I C   F U N C T I O N S
  ***************************************************************************/
@@ -236,14 +314,14 @@ namespace tftplib
 			return 0;
 		}
 
-		switch (os->LocalAddress->ai_addr->sa_family)
+		switch (os->LocalAddress.sa_family)
 		{
 		case AF_INET: {
-			sockaddr_in* inet4 = (sockaddr_in*)os->LocalAddress->ai_addr;
+			sockaddr_in* inet4 = (sockaddr_in*)&os->LocalAddress;
 			return ntohs(inet4->sin_port);
 		}
 		case AF_INET6: {
-			sockaddr_in6* inet6 = (sockaddr_in6*)os->LocalAddress->ai_addr;
+			sockaddr_in6* inet6 = (sockaddr_in6*)&os->LocalAddress;
 			return ntohs(inet6->sin6_port);
 		}
 		}
@@ -254,7 +332,7 @@ namespace tftplib
 	bool
 	UdpSocketWindows::IsIpv6() const {
 		std::shared_ptr<OsSpecific> os = Os();
-		return os && os->LocalAddress->ai_family == AF_INET6;
+		return os && os->LocalAddress.sa_family== AF_INET6;
 	}
 
 	std::string 
@@ -263,15 +341,15 @@ namespace tftplib
 		std::shared_ptr<OsSpecific> os = Os();
 		if (os) 
 		{
-			switch (os->LocalAddress->ai_family) 
+			switch (os->LocalAddress.sa_family)
 			{
 				case AF_INET: {
-					sockaddr_in* addr = (sockaddr_in*)os->LocalAddress->ai_addr;
+					sockaddr_in* addr = (sockaddr_in*)&os->LocalAddress;
 					return AddrToStr(&addr->sin_addr);
 				} break;
 
 				case AF_INET6: {
-					sockaddr_in6* addr = (sockaddr_in6*)os->LocalAddress->ai_addr;
+					sockaddr_in6* addr = (sockaddr_in6*)&os->LocalAddress;
 					return AddrToStr(&addr->sin6_addr);
 				} break;
 			}
@@ -286,15 +364,15 @@ namespace tftplib
 		std::shared_ptr<OsSpecific> os = Os();
 		if (os)
 		{
-			switch (os->LocalAddress->ai_family)
+			switch (os->LocalAddress.sa_family)
 			{
 				case AF_INET: {
-					sockaddr_in* addr = (sockaddr_in*)os->LocalAddress->ai_addr;
+					sockaddr_in* addr = (sockaddr_in*)&os->LocalAddress;
 					return ntohs(addr->sin_port);
 				} break;
 
 				case AF_INET6: {
-					sockaddr_in6* addr = (sockaddr_in6*)os->LocalAddress->ai_addr;
+					sockaddr_in6* addr = (sockaddr_in6*)&os->LocalAddress;
 					return ntohs(addr->sin6_port);
 				} break;
 			}
@@ -347,7 +425,8 @@ namespace tftplib
 
 		std::shared_ptr<UdpSocketWindows::OsSpecific> os{ std::make_shared<OsSpecific>() };
 
-		if (!CreateSocket(os.get())) {
+		bool isIpv6 = IsHostnameIpv6(hostname);
+		if (!CreateSocket(os.get(), isIpv6)) {
 			return false;
 		}
 
@@ -355,7 +434,7 @@ namespace tftplib
 			return false;
 		}
 
-		if (!SetSocketOptions(os.get())) {
+		if (!SetSocketOptions(os.get(), isIpv6)) {
 			return false;
 		}
 
@@ -364,7 +443,7 @@ namespace tftplib
 		}
 
 		Out() << "UDP socket addr: "
-			<< AddrToStr(os->LocalAddress->ai_addr)
+			<< AddrToStr(&os->LocalAddress)
 			<< std::endl;
 
 		// ************************************************************
@@ -570,26 +649,15 @@ namespace tftplib
 	}
 
 	bool
-	UdpSocketWindows::CreateSocket(OsSpecific* os)
+	UdpSocketWindows::CreateSocket(OsSpecific* os, bool isIpv6)
 	{
-		static const TCHAR* MSAFD_TCPIP_PROVIDER = _T("{E70F1AA0-AB8B-11CF-8CA3-00805F48A192}");
-
-		WSAPROTOCOL_INFO protocolInfo = { 0 };
-		HRESULT result = CLSIDFromString(MSAFD_TCPIP_PROVIDER,
-			&protocolInfo.ProviderId);
-
-		if (result != S_OK) {
-			Err() << "Critical: Failed to convert provider GUID into the proper format. "
-				<< std::endl;
-
-			return false;
-		}
+		ProviderList providers {};
 
 		os->Socket = WSASocket(
-			os->LocalAddress->ai_family,
-			os->LocalAddress->ai_socktype,
-			os->LocalAddress->ai_protocol,
-			&protocolInfo,
+			isIpv6 ? AF_INET6 : AF_INET,
+			SOCK_DGRAM,
+			IPPROTO_UDP,
+			providers.FindProvider(isIpv6),
 			0,
 			WSA_FLAG_OVERLAPPED
 		);
@@ -603,10 +671,8 @@ namespace tftplib
 	}
 
 	bool
-	UdpSocketWindows::SetSocketOptions(OsSpecific* os)
+	UdpSocketWindows::SetSocketOptions(OsSpecific* os, bool isIpv6)
 	{
-		bool isIpv6 = os->LocalAddress->ai_family == AF_INET6;
-
 		DWORD ipPktInfo = 0x1337; // viva them truthy values.
 		int result = setsockopt(os->Socket,
 			isIpv6 ? IPPROTO_IPV6 : IPPROTO_IP,
@@ -639,8 +705,8 @@ namespace tftplib
 
 		// Bind the socket with request parameters
 		result = bind(os->Socket,
-			os->LocalAddress->ai_addr,
-			(int)os->LocalAddress->ai_addrlen);
+			requestAddr.addrInfo->ai_addr,
+			(int)requestAddr.addrInfo->ai_addrlen);
 
 		if (result == SOCKET_ERROR) {
 			LogSocketError("bind");
@@ -651,10 +717,9 @@ namespace tftplib
 		int namelen = sizeof(sockaddr);
 		result = getsockname(
 			os->Socket,
-			os->LocalAddress->ai_addr,
+			&os->LocalAddress,
 			&namelen
 		);
-		os->LocalAddress->ai_addrlen = namelen;
 
 		if (result != 0) {
 			LogSocketError("getsockname");

@@ -64,7 +64,8 @@ namespace tftplib {
 			errorMessage = "";
 		}
 
-		size_t messageLength = sizeof(MessageError) + strlen(errorMessage);
+		size_t errorLen = strlen(errorMessage);
+		size_t messageLength = sizeof(MessageError) + errorLen;
 		MessageError* message = (MessageError*)allocator(messageLength);
 		if (message == nullptr) {
 			return nullptr;
@@ -72,7 +73,7 @@ namespace tftplib {
 
 		message->opcode = OpCode::ERROR;
 		message->errorCode = errorCode;
-		strcpy_s(message->errorMessage, errorMessage);
+		strcpy_s(message->errorMessage, errorLen + 1, errorMessage);
 		return message;
 	}
 

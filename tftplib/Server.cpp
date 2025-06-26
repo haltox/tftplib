@@ -147,7 +147,43 @@ namespace tftplib {
 				continue;
 			}
 
-			ProcessNewTransactionRequest(datagram);
+			if (datagram->GetDataSize() < sizeof(OpCode)) 
+			{
+				Err() << "Received invalid message. Ignoring." << std::endl;
+				continue;
+			}
+
+			OpCode *op = (OpCode *)datagram->GetData();
+			Out() << "Control socket receive: " << OpCodeToStr(*op) << " from "
+				<< datagram->GetSourcePort() 
+				<< ":" << datagram->GetSourcePort()
+				<< std::endl;
+
+			switch (*op)
+			{
+				case OpCode::RRQ:
+				case OpCode::WRQ:
+					Out() << "Received request message" << std::endl;
+					ProcessNewTransactionRequest(datagram);
+					break;
+
+				case OpCode::ACK:
+					if (datagram->GetDataSize() < sizeof(MessageAck))
+					{
+						Out() << "Ignoring malformed ACK" << std::endl;
+					}
+					else 
+					{
+						MessageAck *ack = (MessageAck*)datagram->GetData();
+						Out() << "Ignoring ACK " << ack->getBlockNumber() << std::endl;
+					}
+					break;
+
+				default:
+					Err() << "Ignoring unexpected message" << std::endl;
+					break;
+			}
+
 		}
 
 		_running = false;
@@ -157,6 +193,11 @@ namespace tftplib {
 	Server::ProcessNewTransactionRequest(
 		std::shared_ptr<Datagram> &transactionRequest)
 	{
+		Out() << "Received message on control port from "
+			<< transactionRequest->GetSourceAddress()
+			<< ":"  << transactionRequest->GetSourcePort()
+			<< std::endl;
+
 		// Check if we are handling max transactions
 		if (IsHandlingMaxTransactions()) {
 			Err() << "Rejecting transaction from "
@@ -248,20 +289,21 @@ namespace tftplib {
 		for (size_t i = 0; i < _workers.size(); ++i)
 		{
 			if ( !_workers[i]->IsBusy()) {
-				_workers[i]->AssignTransaction(transactionRequest, socket);
-
 				_transactions[key] = { 
 					freeSocket, 
 					transactionRequest->GetSourcePort(),
 					socket->GetLocalPort()
 				};
+				
+				_workers[i]->AssignTransaction(transactionRequest, socket);
+
 				return _workers[i];
 			}
 		}
 
-		// Shouldn't happen.w
+		// Shouldn't happen.
 		Err()  << "No available worker to handle transaction : "
-			<< key
+			<< clientTid << "/" << serverTid
 			<< std::endl;
 
 		return nullptr;

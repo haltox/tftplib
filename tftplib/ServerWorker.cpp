@@ -120,7 +120,7 @@ namespace tftplib {
 			Err() << "Serious threading error in AssignTransaction" << std::endl;
 		}
 
-		// TODO ProcessRequestMessage?
+		ProcessRequestMessage(transactionRequest);
 	}
 
 	bool ServerWorker::IsBusy() const
@@ -140,6 +140,8 @@ namespace tftplib {
 
 	void ServerWorker::Run()
 	{
+		_state = TransactionState::WAITING_FOR_REQUEST;
+		
 		while (_activity == ActivityState::ACTIVE)
 		{
 			while (_activity == ActivityState::ACTIVE 
@@ -292,10 +294,12 @@ namespace tftplib {
 		_state = rwrq->getMessageCode() == OpCode::RRQ ?
 			TransactionState::WAITING_FOR_ACK  :
 			TransactionState::WAITING_FOR_DATA ;
-
-		if (!Ack(0))
-		{
-			MessageErrorCategory::CRITICAL_SERVER_ERROR;
+		if (rwrq->getMessageCode() == OpCode::WRQ) {
+			if (!Ack(0))
+			{
+				MessageErrorCategory::CRITICAL_SERVER_ERROR;
+			}
+			_state = TransactionState::WAITING_FOR_DATA;
 		}
 
 		return MessageErrorCategory::NO_ERROR;

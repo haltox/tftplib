@@ -36,65 +36,42 @@ int main()
 {
 	DebugManager::Init();
 
-	{
-		std::filesystem::path p1 {"/a/b/c"};
-		std::filesystem::path p2{ "/a/b/c/d" };
-		std::filesystem::path p3{ "/a/b" };
-		std::filesystem::path p4{ "/a/c/c" };
-
-		std::cout << 
-			std::filesystem::absolute(p1).compare(std::filesystem::absolute(p2))
-		<< std::endl;
-
-		std::cout <<
-			std::filesystem::absolute(p1).compare(std::filesystem::absolute(p3))
-			<< std::endl;
-
-		std::cout <<
-			std::filesystem::absolute(p1).compare(std::filesystem::absolute(p4))
-			<< std::endl;
-
-	}
-
+	if(0)
 	{
 		WSADATA wsaData;
-		if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-			throw std::runtime_error("WSAStartup failed");
+		int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+		if (iResult != 0) {
+			// Handle error
 		}
 
-		addrinfo hints{};
-		hints.ai_family = AF_UNSPEC;
-		hints.ai_socktype = SOCK_DGRAM;
-		hints.ai_protocol = IPPROTO_UDP;
+		DWORD bufSize = 0;
+		int r = WSAEnumProtocols(nullptr, nullptr, &bufSize);
+		if (r == SOCKET_ERROR && WSAGetLastError() == WSAENOBUFS) {
+			std::cout << "boop enobufs" << std::endl;
+		}
 
-		std::string portStr = std::to_string(0);
+		char* buf = new char[bufSize];
+		WSAPROTOCOL_INFO* arr = (WSAPROTOCOL_INFO*)buf;
+		r = WSAEnumProtocols(nullptr, arr, &bufSize);
 
-		addrinfo *address {0};
+		std::cout << "Proto count " << r << std::endl;
+		WCHAR GuidString[40] = { 0 };
 
-		int result = getaddrinfo("::",
-			"0",
-			&hints,
-			&address);
-		
-		auto s = socket(AF_UNSPEC, SOCK_DGRAM, IPPROTO_UDP);
-		bind(s, address->ai_addr, address->ai_addrlen);
+		for (int i = 0; i < r; i++) {
+			if (arr[i].dwServiceFlags1 & XP1_CONNECTIONLESS
+				&& arr[i].iProtocol == IPPROTO_UDP 
+				&& arr[i].iAddressFamily == AF_INET) {
+				StringFromGUID2(arr[i].ProviderId,
+					(LPOLESTR)&GuidString, 39);
 
-		sockaddr resultAddr {0}; 
-		int namelen = sizeof(sockaddr);
-		result = getsockname(
-			s,
-			&resultAddr,
-			&namelen
-		);
+				std::wcout << L"Provider : " << GuidString << std::endl;
+				std::wcout << arr[i].szProtocol << std::endl;
+			}
+		}
 
-		std::cout << ((sockaddr_in*)&resultAddr)->sin_port << std::endl;
-
-
-		return result;
+		return 0;
 	}
 
-
-	
 
     tftplib::Server server;
 
@@ -103,23 +80,9 @@ int main()
         .SetErrStream(&std::cerr);
 
 	server.Out() << "Starting TFTP server..." << std::endl;
+    
+	server.Start();
 
-    server.Start();
-
-    tftplib::UdpSocketWindows socket{};
-	socket.SetOutStream(&std::cout)
-		.SetErrStream(&std::cerr);
-
-	socket.Bind("0.0.0.0", 10099);
-
-    std::cin.ignore();
-
-	std::cout << socket.HasDatagram() << std::endl;
-    if (socket.HasDatagram()) {
-		auto factory = tftplib::DatagramFactory::Instantiate();
-		auto datagram = socket.Receive(*factory);
-
-	}
 
     std::cin.ignore();
 
