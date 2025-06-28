@@ -94,7 +94,6 @@ namespace tftplib
 
 		void LogSocketError(const char* what) const;
 
-
 	private:
 
 		std::ostream* _out;

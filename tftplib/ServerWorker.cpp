@@ -4,6 +4,7 @@
 #include <thread>
 #include <string>
 
+
 namespace tftplib {
 	class Finalizer {
 		private:
@@ -28,6 +29,8 @@ namespace tftplib {
 		, _factory { factory }
 	{
 	}
+
+	ServerWorker::~ServerWorker(){}
 
 	// Thread handling
 	void ServerWorker::Start()
@@ -150,35 +153,128 @@ namespace tftplib {
 				_signal.WaitForSignal( std::chrono::seconds{1});
 			}
 
-			while(_activity == ActivityState::ACTIVE 
-				&& _state != TransactionState::TERMINATING)
-			{
-				TickTransaction();
-			}
-
-			// Process messages or transactions here
-			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			ProcessActivityStateChange();
+			ProcessTransactionState();
 		}
 
 		_state = TransactionState::INACTIVE;
 		_activity = ActivityState::INACTIVE;
 	}
 
-	void ServerWorker::TickTransaction()
+	void ServerWorker::ProcessActivityStateChange()
 	{
-		
+		if (_activity == ActivityState::ACTIVE
+			|| _activity == ActivityState::INACTIVE)
+		{
+			return;
+		}
+
+		Out() << "[TERMINATING] Processing request to stop" << std::endl;
+
+		while (_state == TransactionState::SETTING_UP_REQUEST
+			|| _state == TransactionState::PROCESSING_REQUEST)
+		{
+			Out() << "[TERMINATING] Waiting for request message to be handled..." 
+				<< std::endl;
+			_signal.WaitForSignal(std::chrono::milliseconds{ 50 });
+		}
+
+		if (_state != TransactionState::WAITING_FOR_REQUEST)
+		{
+			ErrorWithMessage(ErrorCode::UNDEFINED, "Server shut down");
+		}
+
+		_state = TransactionState::TERMINATING;
 	}
 
-	void ServerWorker::TryProcessMessage()
+	void ServerWorker::ProcessTransactionState()
 	{
+		switch (_state)
+		{
+			case TransactionState::INACTIVE:
+			case TransactionState::WAITING_FOR_REQUEST:
+				return;
 
-		
+			case TransactionState::SETTING_UP_REQUEST:
+			case TransactionState::PROCESSING_REQUEST:
+				_signal.WaitForSignal(std::chrono::milliseconds{ 20 });
+				return;
+
+			case TransactionState::WAITING_FOR_DATA:
+				return ProcessWaitingForDataState();
+
+			case TransactionState::SENDING_DATA:
+				return ProcessSendingDataState();
+			
+			case TransactionState::WAITING_FOR_ACK:
+				return ProcessWaitingForAckState();
+
+			case TransactionState::TERMINATING:
+				return;
+		}
+	}
+
+	void 
+	ServerWorker::ProcessWaitingForDataState()
+	{
+		using namespace std::chrono;
+		using ms = milliseconds;
+
+		auto beginning = steady_clock::now();
+		auto now = beginning;
+
+		auto factory = _factory.lock();
+		if (!factory)
+		{
+			Err() << "[WaitingForData] Cannot grab factory. Shutting down?"
+				<< std::endl;
+			return;
+		}
+
+		while (duration_cast<ms>(now - beginning) < _transactionTimeout
+			&& _activity == ActivityState::ACTIVE
+			&& !_socket->Poll(50) )
+		{
+			now = steady_clock::now();
+			Out() << "[WaitingForData] Elapsed: "
+				<< duration_cast<ms>(now - beginning).count() << "ms"
+				<< std::endl;
+		}
+
+		if (_activity != ActivityState::ACTIVE)
+		{
+			return;
+		}
+
+		auto errorResult = MessageErrorCategory::TIMEOUT;
+		if (_socket->HasDatagram())
+		{
+			auto datagram = _socket->Receive(*factory);
+
+			if (!datagram)
+			{
+				Err() << "[WaitingForData] could not allocate memory for message"
+					<< std::endl;
+			}
+			errorResult = ProcessDataMessage(datagram);
+		}
+
+		if (errorResult != MessageErrorCategory::NO_ERROR)
+		{
+			Abort(errorResult);
+		}
+	}
+
+	void 
+	ServerWorker::ProcessSendingDataState()
+	{
 
 	}
 
-	void ServerWorker::ProcessTick()
+	void 
+	ServerWorker::ProcessWaitingForAckState()
 	{
-		
+
 	}
 
 	void 
@@ -272,35 +368,44 @@ namespace tftplib {
 		{
 			return MessageErrorCategory::INVALID_MODE;
 		}
-		
+
+		_currentOperation = rwrq->getMessageCode();
 		_asciiMode = rwrq->getMode() == mode::Mode::NETASCII;
 
 		/* **************************************************************
 		 *  Lock file 
 		 *  *************************************************************/
-		auto locked = rwrq->getMessageCode() == OpCode::RRQ
+		_fileLocked = rwrq->getMessageCode() == OpCode::RRQ
 			? _parent.FileSecurity().LockFileForRead(_filePath)
 			: _parent.FileSecurity().LockFileForWrite(_filePath);
 
-		if (!locked)
+		if (!_fileLocked)
 		{
 			return MessageErrorCategory::FILE_LOCKED;
 		}
+
+		auto eolMode = _asciiMode 
+			? FileWriter::ForceNativeEOL::YES 
+			: FileWriter::ForceNativeEOL::NO;
+		_fw.reset( rwrq->getMessageCode() == OpCode::RRQ
+			? nullptr
+			: new FileWriter(_filePath, eolMode ) );
 
 		 /* **************************************************************
 		  *  Everything went well - update state and ack.
 		  *  *************************************************************/
 
 		_state = rwrq->getMessageCode() == OpCode::RRQ ?
-			TransactionState::WAITING_FOR_ACK  :
+			TransactionState::SENDING_DATA :
 			TransactionState::WAITING_FOR_DATA ;
 		if (rwrq->getMessageCode() == OpCode::WRQ) {
 			if (!Ack(0))
 			{
 				MessageErrorCategory::CRITICAL_SERVER_ERROR;
 			}
-			_state = TransactionState::WAITING_FOR_DATA;
 		}
+
+		_signal.EmitSignal();
 
 		return MessageErrorCategory::NO_ERROR;
 	}
@@ -308,12 +413,69 @@ namespace tftplib {
 	void 
 	ServerWorker::RejectTransactionRequest(MessageErrorCategory errorReason)
 	{
-		// SUPER IMPORTANT TODO
+		Abort(errorReason);
+	}
+
+	ServerWorker::MessageErrorCategory
+	ServerWorker::ProcessDataMessage(
+			const std::shared_ptr<Datagram>& datagram)
+	{
+		/* ***************************************************
+		 *  Validation of message and opcode
+		 * ***************************************************/
+
+		// msg size
+		if (datagram->GetDataSize() < sizeof(MessageData))
+		{
+			Err() << "[ProcessDataMessage] INVALID_MESSAGE_SIZE" << std::endl;
+			return MessageErrorCategory::INVALID_MESSAGE_SIZE;
+		}
+
+		// opcode
+		OpCode* opCode = (OpCode*)datagram->GetData();
+		if ( *opCode == OpCode::ERROR) {
+			Err() << "[ProcessDataMessage] CLIENT_ERROR" << std::endl;
+			return MessageErrorCategory::CLIENT_ERROR;
+		}
+
+		MessageData *msg = (MessageData * )datagram->GetData();
+		uint16_t dataSize = datagram->GetDataSize() - msg->HeaderSize();
+		bool isLastMessage = dataSize != _dataBlockSize;
+		uint16_t expectedBlock = (_lastAck == 0xFFFF) ? 0 : (_lastAck + 1);
+		
+		Out() << "[ProcessDataMessage] Block=" << msg->getBlockNumber()
+			<< ", expectedBlock=" << expectedBlock
+			<< ", msgsize=" << datagram->GetDataSize()
+			<< ", blocksize=" << dataSize
+			<< std::endl;
+		
+		// block number
+		if (msg->getBlockNumber() != expectedBlock)
+		{
+			return MessageErrorCategory::INVALID_BLOCK;
+		}
+
+		/* ***************************************************
+		 *  Process the message
+		 * ***************************************************/
+
+		_fw->WriteBlock( (uint8_t*)msg->getData(), dataSize);
+		Ack(msg->getBlockNumber());
+
+		if (isLastMessage)
+		{
+			_fw->Finalize();
+			TerminateTransaction();
+		}
+
+		return MessageErrorCategory::NO_ERROR;
 	}
 
 	bool
 	ServerWorker::Ack(uint16_t ack)
 	{
+		Out() << "[Ack] block=" << ack << std::endl;
+
 		std::shared_ptr<Datagram> datagram = 
 			MakeMessageDatagram<MessageAck>(_factory, ack);
 
@@ -336,6 +498,85 @@ namespace tftplib {
 	}
 
 	bool 
+	ServerWorker::Error(MessageErrorCategory errorCode)
+	{
+		const char* msg = nullptr;
+		ErrorCode err = ErrorCode::UNDEFINED;
+
+		switch (errorCode)
+		{
+			case MessageErrorCategory::NO_ERROR:
+				return false;
+			
+			case MessageErrorCategory::INVALID_STATE:
+			case MessageErrorCategory::INVALID_OPCODE:
+				err = ErrorCode::ILLEGAL_OPERATION;
+				break;
+
+			case MessageErrorCategory::TIMEOUT:
+				msg = "transaction timed out";
+				break;
+
+			case MessageErrorCategory::INVALID_MESSAGE_SIZE:
+			case MessageErrorCategory::INVALID_MESSAGE_FORMAT:
+			case MessageErrorCategory::INVALID_MODE:
+				err = ErrorCode::ILLEGAL_OPERATION;
+				break;
+
+			case MessageErrorCategory::NO_SUCH_FILE:
+				err = ErrorCode::FILE_NOT_FOUND;
+				break;
+
+			case MessageErrorCategory::ACCESS_FORBIDDEN:
+				err = ErrorCode::ACCESS_VIOLATION;
+				break;
+			case MessageErrorCategory::FILE_LOCKED:
+				msg = "temporarily unavailable";
+				break;
+
+			case MessageErrorCategory::UNSAFE_PATH:
+				err = ErrorCode::ACCESS_VIOLATION;
+				break;
+
+			case MessageErrorCategory::CRITICAL_SERVER_ERROR:
+				msg = "critical server error";
+				break;
+				
+		}
+
+		return ErrorWithMessage(err, msg);
+	}
+
+
+	bool
+	ServerWorker::ErrorWithMessage(ErrorCode errorCode, const char* msg)
+	{
+		std::shared_ptr<Datagram> datagram =
+			MakeMessageDatagram<MessageError>(_factory, errorCode, msg);
+
+		return SendMessage(datagram);
+	}
+
+	bool
+	ServerWorker::Abort(MessageErrorCategory error, bool sendErrorMsg)
+	{
+		Out() << "[Abort] error=" 
+			<< MessageErrorCategoryToString(error) << std::endl;
+
+		if (error == MessageErrorCategory::NO_ERROR)
+		{
+			return false;
+		}
+		
+		if (sendErrorMsg)
+		{
+			Error(error);
+		}
+
+		return TerminateTransaction();
+	}
+
+	bool 
 	ServerWorker::SendMessage(std::shared_ptr<Datagram>& datagram)
 	{
 		if (!datagram)
@@ -349,6 +590,27 @@ namespace tftplib {
 		}
 
 		return _socket->Send(datagram);
+	}
+
+	bool 
+	ServerWorker::TerminateTransaction()
+	{
+		Out() << "[TerminateTransaction]" << std::endl;
+
+		_fw = nullptr;
+		_socket = nullptr;
+
+		if (_fileLocked && _currentOperation != OpCode::UNDEF)
+		{
+			(_currentOperation == OpCode::RRQ)
+				? _parent.FileSecurity().UnlockFileForRead(_filePath)
+				: _parent.FileSecurity().UnlockFileForWrite(_filePath);
+		}
+
+		bool result = _parent.TerminateTransaction(_clientTid, _serverTid);
+		_state = TransactionState::WAITING_FOR_REQUEST;
+		
+		return result;
 	}
 
 	ServerWorker::MessageErrorCategory
@@ -370,6 +632,44 @@ namespace tftplib {
 			case FSEVR::INVALID_PERMISSIONS: return MEC::ACCESS_FORBIDDEN;
 
 			default: return MEC::ACCESS_FORBIDDEN;
+		}
+	}
+
+	const char* 
+	ServerWorker::MessageErrorCategoryToString(MessageErrorCategory mec) const
+	{
+		switch (mec)
+		{
+			case MessageErrorCategory::NO_ERROR: 
+				return "NO_ERROR";
+			case MessageErrorCategory::INVALID_STATE: 
+				return "INVALID_STATE";
+			case MessageErrorCategory::INVALID_OPCODE:
+				return "INVALID_OPCODE";
+			case MessageErrorCategory::INVALID_BLOCK:
+				return "INVALID_BLOCK";
+			case MessageErrorCategory::TIMEOUT:
+				return "TIMEOUT";
+			case MessageErrorCategory::INVALID_MESSAGE_SIZE:
+				return "INVALID_MESSAGE_SIZE";
+			case MessageErrorCategory::INVALID_MESSAGE_FORMAT:
+				return "INVALID_MESSAGE_FORMAT";
+			case MessageErrorCategory::INVALID_MODE:
+				return "INVALID_MODE";
+			case MessageErrorCategory::NO_SUCH_FILE:
+				return "NO_SUCH_FILE";
+			case MessageErrorCategory::ACCESS_FORBIDDEN:
+				return "ACCESS_FORBIDDEN";
+			case MessageErrorCategory::FILE_LOCKED:
+				return "FILE_LOCKED";
+			case MessageErrorCategory::UNSAFE_PATH:
+				return "UNSAFE_PATH";
+			case MessageErrorCategory::CLIENT_ERROR:
+				return "CLIENT_ERROR";
+			case MessageErrorCategory::CRITICAL_SERVER_ERROR:
+				return "CRITICAL_SERVER_ERROR";
+			default:
+				return "[UNKNOWN]";
 		}
 	}
 }

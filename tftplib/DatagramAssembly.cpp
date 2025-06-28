@@ -12,7 +12,7 @@ namespace tftplib {
 		: _parent{ parent }
 		, _datagram{ new Datagram{} }
 	{
-		_parent->InitializeDatagramBuffers(*_datagram);
+		_isValid = _parent->InitializeDatagramBuffers(*_datagram);
 	}
 
 	DatagramAssembly&

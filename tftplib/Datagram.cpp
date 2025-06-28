@@ -2,7 +2,6 @@
 #include "Datagram.h"
 #include "DatagramFactory.h"
 #include <bit>
-
 namespace tftplib {
 	
 	Datagram::Datagram(Datagram&& rhs) noexcept
@@ -28,6 +27,8 @@ namespace tftplib {
 
 		return *this;
 	}
+
+	
 
 	Datagram::~Datagram() 
 	{

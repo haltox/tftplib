@@ -25,6 +25,16 @@ namespace tftplib
 
 	class Server
 	{
+
+	private:
+		struct TransactionRecord {
+			size_t socketId {0};
+
+			uint16_t clientTID {0};
+			uint16_t serverTID {0};
+
+			std::atomic<bool> isActive {false};
+		};
 		
 	public:
 		Server();
@@ -64,22 +74,18 @@ namespace tftplib
 		std::shared_ptr<ServerWorker> AssignWorkerToTransaction(
 			std::shared_ptr<Datagram>& transactionRequest);
 
-		std::string MakeTransactionKey(
-			const std::string& host,
-			uint16_t requestId) const;
+		TransactionRecord* FindTransactionRecord(
+			const std::function<bool(TransactionRecord*)>& filter) const;
 
-		std::string MakeTransactionKey(const Datagram& request) const;
+		TransactionRecord* FindTransactionRecord( uint16_t ctid, uint16_t stid) const;
+
+		TransactionRecord* FindFreeTransactionRecord() const;
+
+		bool TerminateTransaction( uint16_t clientTid, uint16_t serverTid );
+
 	private:
 		// Reply functions
 		void ReplyRejectTransactionNoWorkerAvailable(const Datagram& transactionRequest);
-
-	private:
-		struct TransactionRecord {
-			size_t socketId;
-			
-			uint16_t clientTID;
-			uint16_t serverTID;
-		};
 
 	private:
 
@@ -110,7 +116,10 @@ namespace tftplib
 
 		std::thread _dispatchThread {};
 		std::vector<std::shared_ptr<ServerWorker>> _workers;
-		std::unordered_map<uint64_t, TransactionRecord> _transactions {};
+		
+		TransactionRecord *_transactions;
+
+
 		std::atomic<bool> _running{ false };
 		std::atomic<bool> _starting{ false };
 		std::atomic<bool> _stopping{ false };

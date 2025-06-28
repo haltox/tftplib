@@ -20,7 +20,10 @@ namespace tftplib
 		DATA	= IS_BIG_ENDIAN ? 0x0003 : 0x0300,	// Data
 		ACK		= IS_BIG_ENDIAN ? 0x0004 : 0x0400,	// Acknowledgment
 		ERROR	= IS_BIG_ENDIAN ? 0x0005 : 0x0500,	// Error
-		OACK	= IS_BIG_ENDIAN ? 0x0006 : 0x0600	// Option Acknowledgment
+		OACK	= IS_BIG_ENDIAN ? 0x0006 : 0x0600,	// Option Acknowledgment
+
+
+		UNDEF	= 0xFFFF
 	};
 
 	const char* OpCodeToStr(OpCode op);
@@ -95,6 +98,10 @@ namespace tftplib
 		static MessageError* create(ErrorCode errorCode, 
 			std::function<void*(size_t)> allocator,
 			const char* customErrorMessage = nullptr);
+
+		static MessageError* create(ErrorCode errorCode,
+			const char* customErrorMessage,
+			std::function<void* (size_t)> allocator );
 
 		OpCode getMessageCode() const {
 			return opcode;
@@ -187,6 +194,10 @@ namespace tftplib
 
 		char* getDataBuffer() {
 			return data;
+		}
+
+		uint16_t HeaderSize() const { 
+			return sizeof(OpCode) + sizeof(uint16_t); 
 		}
 	};
 

@@ -77,6 +77,14 @@ namespace tftplib {
 		return message;
 	}
 
+	MessageError* 
+	MessageError::create(ErrorCode errorCode,
+		const char* customErrorMessage,
+		std::function<void* (size_t)> allocator)
+	{
+		return MessageError::create(errorCode, allocator, customErrorMessage);
+	}
+
 	MessageRequest* MessageRequest::createRequest(OpCode opCode,
 		const char* filename,
 		mode::Mode mode,

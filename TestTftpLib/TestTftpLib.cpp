@@ -36,43 +36,6 @@ int main()
 {
 	DebugManager::Init();
 
-	if(0)
-	{
-		WSADATA wsaData;
-		int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-		if (iResult != 0) {
-			// Handle error
-		}
-
-		DWORD bufSize = 0;
-		int r = WSAEnumProtocols(nullptr, nullptr, &bufSize);
-		if (r == SOCKET_ERROR && WSAGetLastError() == WSAENOBUFS) {
-			std::cout << "boop enobufs" << std::endl;
-		}
-
-		char* buf = new char[bufSize];
-		WSAPROTOCOL_INFO* arr = (WSAPROTOCOL_INFO*)buf;
-		r = WSAEnumProtocols(nullptr, arr, &bufSize);
-
-		std::cout << "Proto count " << r << std::endl;
-		WCHAR GuidString[40] = { 0 };
-
-		for (int i = 0; i < r; i++) {
-			if (arr[i].dwServiceFlags1 & XP1_CONNECTIONLESS
-				&& arr[i].iProtocol == IPPROTO_UDP 
-				&& arr[i].iAddressFamily == AF_INET) {
-				StringFromGUID2(arr[i].ProviderId,
-					(LPOLESTR)&GuidString, 39);
-
-				std::wcout << L"Provider : " << GuidString << std::endl;
-				std::wcout << arr[i].szProtocol << std::endl;
-			}
-		}
-
-		return 0;
-	}
-
-
     tftplib::Server server;
 
     server.SetRootDirectory("C:\\tftproot")

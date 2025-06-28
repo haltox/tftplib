@@ -13,10 +13,12 @@
 #include <filesystem>
 #include "tftp_messages.h"
 #include "FileSecurityHandler.h"
+#include "FileWriter.h"
 
 namespace tftplib {
 	class Server;
 	class MessageRequest;
+	class FileWriter;
 
 	class ServerWorker
 	{
@@ -44,6 +46,9 @@ namespace tftplib {
 			WAITING_FOR_DATA,			// Worker thread is waiting for data 
 										// from the client
 
+			SENDING_DATA,				// Worker thread is waiting for ACK from 
+										// the client
+			
 			WAITING_FOR_ACK,			// Worker thread is waiting for ACK from 
 										// the client
 
@@ -56,6 +61,8 @@ namespace tftplib {
 		
 		ServerWorker(Server &parent, 
 			std::weak_ptr<DatagramFactory> factory);
+
+		~ServerWorker();
 
 		// Thread handling
 		void Start();
@@ -82,6 +89,8 @@ namespace tftplib {
 			// State and operation sequencing errors
 			INVALID_STATE,
 			INVALID_OPCODE,
+			INVALID_BLOCK,
+			TIMEOUT,
 			
 			// Message structure errors
 			INVALID_MESSAGE_SIZE,
@@ -96,6 +105,9 @@ namespace tftplib {
 			FILE_LOCKED,
 			UNSAFE_PATH,
 
+			// Received an error from the client - abort processing.
+			CLIENT_ERROR,
+
 			// Critical server error - abort processing.
 			CRITICAL_SERVER_ERROR
 		};
@@ -103,10 +115,12 @@ namespace tftplib {
 	private:
 		void Run();
 
-		void TickTransaction();
+		void ProcessActivityStateChange();
+		void ProcessTransactionState();
 
-		void TryProcessMessage();
-		void ProcessTick();
+		void ProcessWaitingForDataState();
+		void ProcessSendingDataState();
+		void ProcessWaitingForAckState();
 
 		/* ***************************************************
 		 *  Message Processing : RRQ and WRQ
@@ -121,6 +135,13 @@ namespace tftplib {
 		void RejectTransactionRequest(MessageErrorCategory errorReason);
 
 		/* ***************************************************
+		 *  Message Processing : Data
+		 * ***************************************************/
+
+		MessageErrorCategory ProcessDataMessage(
+			const std::shared_ptr<Datagram>& dataMessage );
+
+		/* ***************************************************
 		 *  General state and message handling
 		 * ***************************************************/
 
@@ -128,7 +149,15 @@ namespace tftplib {
 
 		bool Error(ErrorCode errorCode);
 
+		bool Error(MessageErrorCategory errorCode);
+
+		bool ErrorWithMessage(ErrorCode errorCode, const char* msg);
+
+		bool Abort(MessageErrorCategory error, bool sendErrorMsg = true);
+
 		bool SendMessage(std::shared_ptr<Datagram> &datagram);
+
+		bool TerminateTransaction();
 
 		/* ***************************************************
 		 *  General utility functions
@@ -138,6 +167,7 @@ namespace tftplib {
 		FileSecurityErrorToMessageError(
 			FileSecurityHandler::ValidationResult fse) const;
 
+		const char* MessageErrorCategoryToString(MessageErrorCategory mec) const;
 
 		template<typename T, typename... Args>
 		std::shared_ptr<Datagram>
@@ -152,17 +182,26 @@ namespace tftplib {
 		std::atomic<ActivityState> _activity {ActivityState::INACTIVE};
 		std::atomic<TransactionState> _state { TransactionState::INACTIVE };
 
-		// Transaction settings
+		// Transaction resources and settings
 		std::string _clientHost {""};
 		uint16_t _clientTid {0};
 		uint16_t _serverTid{ 0 };
 		uint16_t _lastAck {0};
 
-		std::filesystem::path _filePath {""};
+		OpCode _currentOperation { OpCode::UNDEF };
 		bool _asciiMode {false};
+
+		std::filesystem::path _filePath {""};
+		bool _fileLocked {false};
+		std::unique_ptr<FileWriter> _fw {nullptr};
 
 		std::shared_ptr<UdpSocketWindows> _socket{nullptr};
 
+		// General settings
+		std::chrono::milliseconds _transactionTimeout {1000};
+		uint16_t _dataBlockSize {512};
+
+		// 
 		Server &_parent;
 		std::weak_ptr<DatagramFactory> _factory;
 	};

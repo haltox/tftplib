@@ -70,6 +70,7 @@ namespace tftplib {
 			static_cast<uint16_t>(_poolOfControlData.BufferSize());
 		datagram._data = _poolOfDatagram.Alloc();
 		datagram._controlBuffer = _poolOfControlData.Alloc();
+		datagram._reclaimer = _self;
 
 		return (datagram._data && datagram._controlBuffer);
 	}

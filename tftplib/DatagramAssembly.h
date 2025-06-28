@@ -31,9 +31,13 @@ namespace tftplib {
 
 		std::shared_ptr<tftplib::Datagram> Finalize();
 
+		bool IsValid() const { return _isValid; }
+
 	private:
 		std::shared_ptr<DatagramFactory> _parent;
 		std::shared_ptr<tftplib::Datagram> _datagram;
+
+		bool _isValid {false};
 
 		friend class DatagramFactory;
 	};

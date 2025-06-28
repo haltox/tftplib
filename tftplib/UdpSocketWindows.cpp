@@ -487,6 +487,12 @@ namespace tftplib
 		}
 		
 		DatagramAssembly assembly = factory.StartAssembly();
+		if (!assembly.IsValid())
+		{
+			Err() << "[Socket] Could not allocate memory for datagram"
+				<< std::endl;
+			return nullptr;
+		}
 
 		// ************************************************************
 		// Prepare WSAMSG struct and assign all of its buffers
@@ -583,7 +589,6 @@ namespace tftplib
 				break;
 			}
 		}
-
 
 		return assembly.Finalize();
 	}

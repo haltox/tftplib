@@ -6,8 +6,6 @@
 #include "tftp_messages.h"
 #include "Allocator.h"
 
-#define SUPER_TEMP_DEBUGGING 1
-
 namespace tftplib {
 	
 	template<typename T, typename... Args>
@@ -68,6 +66,8 @@ namespace tftplib {
 		_alloc = std::make_shared<Allocator>(_messagePoolSize);
 		_controlSocket.Bind(_host.c_str(), _port);
 
+		_transactions = new TransactionRecord[_threadCount];
+
 		for (uint32_t i = 0; i < _threadCount; i++)
 		{
 			auto socket = std::make_shared<UdpSocketWindows>();
@@ -121,7 +121,7 @@ namespace tftplib {
 
 			_workers.clear();
 			_transactionSockets.clear();
-			_transactions.clear();
+			delete[] _transactions;
 		}
 
 		// Stopping is complete - release lock
@@ -183,7 +183,6 @@ namespace tftplib {
 					Err() << "Ignoring unexpected message" << std::endl;
 					break;
 			}
-
 		}
 
 		_running = false;
@@ -221,23 +220,56 @@ namespace tftplib {
 
 	bool Server::IsHandlingMaxTransactions() const
 	{
-		return _transactions.size() >= _threadCount;
+		return FindFreeTransactionRecord() == nullptr;
 	}
 
-	std::string 
-	Server::MakeTransactionKey(
-		const std::string& host,
-		uint16_t requestId) const
+	Server::TransactionRecord*
+	Server::FindTransactionRecord(
+		const std::function<bool(Server::TransactionRecord*)>& filter) const
 	{
-		return host + ":" + std::to_string(requestId);
+		for (unsigned int i = 0; i < _threadCount; i++)
+		{
+			if (filter(&_transactions[i]))
+			{
+				return &_transactions[i];
+			}
+		}
+		return nullptr;
 	}
 
-	std::string 
-	Server::MakeTransactionKey( const Datagram& request ) const
+	Server::TransactionRecord*
+	Server::FindTransactionRecord(uint16_t ctid, uint16_t stid) const
 	{
-		return MakeTransactionKey(
-			request.GetSourceAddress(),
-			request.GetSourcePort());
+		return FindTransactionRecord([ctid, stid](TransactionRecord* tr) {
+			return tr->clientTID == ctid
+				&& tr->serverTID == stid;
+		});
+	}
+
+	Server::TransactionRecord* Server::FindFreeTransactionRecord() const
+	{
+		return FindTransactionRecord([](TransactionRecord* tr) {
+			return !tr->isActive;
+		});
+	}
+
+	bool 
+	Server::TerminateTransaction(uint16_t clientTid, uint16_t serverTid)
+	{
+		auto it = FindTransactionRecord(clientTid, serverTid);
+		if( it == nullptr ) 
+		{
+			Err() << "[Server] cannot find transaction " 
+				<< clientTid << "/" << " for termination."
+				<< std::endl;
+			return false;
+		}
+
+		auto socket = _transactionSockets[it->socketId];
+		socket->Unbind();
+
+		it->isActive = false;
+		return true;
 	}
 
 	void 
@@ -283,17 +315,23 @@ namespace tftplib {
 			return nullptr;
 		}
 
-		uint64_t clientTid = transactionRequest->GetSourcePort();
-		uint64_t serverTid = socket->GetLocalPort();
-		uint64_t key = (clientTid << 32) | serverTid;
+		uint16_t clientTid = transactionRequest->GetSourcePort();
+		uint16_t serverTid = socket->GetLocalPort();
+		auto * record = FindFreeTransactionRecord();
+		if (record == nullptr)
+		{
+			Err() << "[Server] Couldn't find free record for transaction" << std::endl;
+			return nullptr;
+		}
+
 		for (size_t i = 0; i < _workers.size(); ++i)
 		{
-			if ( !_workers[i]->IsBusy()) {
-				_transactions[key] = { 
-					freeSocket, 
-					transactionRequest->GetSourcePort(),
-					socket->GetLocalPort()
-				};
+			if ( !_workers[i]->IsBusy()) 
+			{
+				record->socketId = freeSocket;
+				record->clientTID = clientTid;
+				record->serverTID = serverTid;
+				record->isActive = true;
 				
 				_workers[i]->AssignTransaction(transactionRequest, socket);
 
@@ -346,11 +384,6 @@ namespace tftplib {
 	}
 
 	bool Server::ValidateConfiguration() const {
-
-		#ifdef SUPER_TEMP_DEBUGGING
-		return true;
-		#endif
-
 		if (_rootDirectory.empty()) {
 			Err() << "Root directory is not set." << std::endl;
 			return false;
