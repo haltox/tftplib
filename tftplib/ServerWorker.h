@@ -19,6 +19,7 @@ namespace tftplib {
 	class Server;
 	class MessageRequest;
 	class FileWriter;
+	class FileReader;
 	class HaloBuffer;
 
 	class ServerWorker
@@ -108,7 +109,8 @@ namespace tftplib {
 			CLIENT_ERROR,
 
 			// Critical server error - abort processing.
-			CRITICAL_SERVER_ERROR
+			CRITICAL_SERVER_ERROR,
+			SHUTTING_DOWN
 		};
 
 	private:
@@ -138,6 +140,17 @@ namespace tftplib {
 
 		MessageErrorCategory ProcessDataMessage(
 			const std::shared_ptr<Datagram>& dataMessage );
+
+		/* ***************************************************
+		 *  Message Processing : Read
+		 * ***************************************************/
+
+		MessageErrorCategory WaitForAck(uint16_t ack);
+		MessageErrorCategory ProcessAckMessage(uint16_t expectedAck,
+			const std::shared_ptr<Datagram>& dataMessage);
+
+		MessageErrorCategory ProcessErrorMessage(
+			const std::shared_ptr<Datagram>& errMessage);
 
 		/* ***************************************************
 		 *  General state and message handling
@@ -191,11 +204,13 @@ namespace tftplib {
 
 		std::filesystem::path _filePath {""};
 		bool _fileLocked {false};
-		std::unique_ptr<FileWriter> _fw {nullptr};
+		std::unique_ptr<FileWriter> _fw;
+		std::unique_ptr<FileReader> _fr;
 
 		std::shared_ptr<UdpSocketWindows> _socket{nullptr};
 
 		// General settings
+		uint32_t _retries {3};
 		std::chrono::milliseconds _transactionTimeout {1000};
 		uint16_t _dataBlockSize {512};
 

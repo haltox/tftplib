@@ -196,7 +196,7 @@ namespace tftplib
 			return data;
 		}
 
-		uint16_t HeaderSize() const { 
+		static uint16_t HeaderSize() { 
 			return sizeof(OpCode) + sizeof(uint16_t); 
 		}
 	};

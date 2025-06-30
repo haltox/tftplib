@@ -80,6 +80,11 @@ namespace tftplib {
 		return _dataSize;
 	}
 
+	void Datagram::SetDataSize(uint16_t sz)
+	{
+		_dataSize = sz;
+	}
+
 	char* Datagram::GetDataBuffer()
 	{
 		return _data;

@@ -4,6 +4,7 @@
 #include <thread>
 #include <string>
 #include "HaloBuffer.h"
+#include "FileReader.h"
 
 namespace tftplib {
 	class Finalizer {
@@ -25,7 +26,9 @@ namespace tftplib {
 
 	ServerWorker::ServerWorker(Server& parent, 
 		std::weak_ptr<DatagramFactory> factory)
-		: _parent{parent}
+		: _fw {nullptr}
+		, _fr{ nullptr }
+		, _parent{parent}
 		, _fileBuffer { std::make_unique<HaloBuffer>(0x020000)  }
 		, _factory { factory }
 	{
@@ -266,7 +269,139 @@ namespace tftplib {
 	void 
 	ServerWorker::ProcessWaitingForAckState()
 	{
+		std::shared_ptr<Datagram> datagram = 
+			MakeMessageDatagram<MessageData>(_factory, _lastAck + 1, _dataBlockSize);
 
+		MessageData* message = (MessageData*)datagram->GetData();
+		size_t read = _fr->ReadBlock((uint8_t*)message->getDataBuffer(),
+			_dataBlockSize);
+		datagram->SetDataSize((uint16_t)read + MessageData::HeaderSize() );
+
+		size_t attempt = 0;
+		while( _activity == ActivityState::ACTIVE ) 
+		{
+			SendMessage(datagram);
+			
+			MessageErrorCategory result = WaitForAck(_lastAck + 1);
+			switch (result)
+			{
+				case MessageErrorCategory::NO_ERROR:
+					if (read < _dataBlockSize)
+					{
+						TerminateTransaction();
+					}
+					return;
+
+				case MessageErrorCategory::TIMEOUT:
+					if( attempt++ <= _retries)
+					{
+						// Try again. Otherwise, fall back to error out.
+						continue;
+					}
+
+				default:
+					Abort(result);
+					return;
+			}
+		}
+	}
+
+	ServerWorker::MessageErrorCategory
+	ServerWorker::WaitForAck(uint16_t ack)
+	{
+		using namespace std::chrono;
+		using ms = milliseconds;
+
+		auto beginning = steady_clock::now();
+		auto now = beginning;
+
+		auto factory = _factory.lock();
+		if (!factory)
+		{
+			Err() << "[WaitForAck] Cannot grab factory. Shutting down?"
+				<< std::endl;
+			return ServerWorker::MessageErrorCategory::CRITICAL_SERVER_ERROR;
+		}
+
+		while (duration_cast<ms>(now - beginning) < _transactionTimeout
+			&& _activity == ActivityState::ACTIVE
+			&& !_socket->Poll(50))
+		{
+			now = steady_clock::now();
+			Out() << "[WaitForAck] Elapsed: "
+				<< duration_cast<ms>(now - beginning).count() << "ms"
+				<< std::endl;
+		}
+
+		if (_activity != ActivityState::ACTIVE)
+		{
+			return ServerWorker::MessageErrorCategory::SHUTTING_DOWN;
+		}
+
+		auto errorResult = MessageErrorCategory::TIMEOUT;
+		if (_socket->HasDatagram())
+		{
+			auto datagram = _socket->Receive(*factory);
+
+			if (!datagram)
+			{
+				Err() << "[WaitForAck] could not allocate memory for message"
+					<< std::endl;
+			}
+
+			errorResult = ProcessAckMessage(ack, datagram);
+		}
+
+		return errorResult;
+	}
+
+	ServerWorker::MessageErrorCategory
+	ServerWorker::ProcessAckMessage( uint16_t expectedAck,
+		const std::shared_ptr<Datagram>& dataMessage)
+	{
+		if (dataMessage->GetDataSize() < sizeof(OpCode))
+		{
+			return ServerWorker::MessageErrorCategory::INVALID_MESSAGE_FORMAT;
+		}
+
+		OpCode *opcode = (OpCode*)dataMessage->GetData();
+		switch (*opcode)
+		{
+			case OpCode::ACK:
+				// Happy path.
+				break;
+
+			case OpCode::ERROR:
+				Err() << "[ProcessAckMessage] Rcv client error" << std::endl;
+				return ProcessErrorMessage(dataMessage);
+
+			default:
+				return ServerWorker::MessageErrorCategory::INVALID_OPCODE;
+		}
+
+		if (dataMessage->GetDataSize() < sizeof(MessageAck))
+		{
+			return ServerWorker::MessageErrorCategory::INVALID_MESSAGE_FORMAT;
+		}
+
+		MessageAck* msg = (MessageAck*)dataMessage->GetData();
+		if (msg->getBlockNumber() != expectedAck)
+		{
+			// Weird case - received ack late?
+			// Let's just return timeout and trigger a resend. 
+			// Maybe things will work out fine.
+			return ServerWorker::MessageErrorCategory::TIMEOUT;
+		}
+
+		_lastAck = expectedAck;
+		return ServerWorker::MessageErrorCategory::NO_ERROR;
+	}
+
+	ServerWorker::MessageErrorCategory
+	ServerWorker::ProcessErrorMessage(const std::shared_ptr<Datagram>& errMessage)
+	{
+			
+		return ServerWorker::MessageErrorCategory::CLIENT_ERROR;
 	}
 
 	void 
@@ -376,16 +511,17 @@ namespace tftplib {
 			return MessageErrorCategory::FILE_LOCKED;
 		}
 
-		auto eolMode = _asciiMode 
-			? FileWriter::ForceNativeEOL::YES 
-			: FileWriter::ForceNativeEOL::NO;
-
 		 /* **************************************************************
 		  *  Everything went well - update state and ack.
 		  *  *************************************************************/
 
 		if (_currentOperation == OpCode::WRQ) {
+			auto eolMode = _asciiMode
+				? FileWriter::ForceNativeEOL::YES
+				: FileWriter::ForceNativeEOL::NO;
+
 			_fw.reset(new FileWriter(_filePath, _fileBuffer.get(), eolMode));
+			_fr.reset(nullptr);
 			_state = TransactionState::WAITING_FOR_DATA;
 			if (!Ack(0))
 			{
@@ -394,10 +530,13 @@ namespace tftplib {
 		}
 		else 
 		{
-			_fw.reset(nullptr);
-			_state = TransactionState::WAITING_FOR_ACK;
+			auto eolMode = _asciiMode
+				? FileReader::ForceNativeEOL::YES
+				: FileReader::ForceNativeEOL::NO;
 
-			///TODO
+			_fw.reset(nullptr);
+			_fr.reset(new FileReader( _filePath, _fileBuffer.get(), eolMode ));
+			_state = TransactionState::WAITING_FOR_ACK;
 		}
 
 
@@ -594,6 +733,7 @@ namespace tftplib {
 		Out() << "[TerminateTransaction]" << std::endl;
 
 		_fw = nullptr;
+		_fr = nullptr;
 		_socket = nullptr;
 
 		if (_fileLocked && _currentOperation != OpCode::UNDEF)

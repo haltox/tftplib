@@ -31,6 +31,7 @@ namespace tftplib
 		
 		const char* GetData() const;
 		uint16_t GetDataSize() const;
+		void SetDataSize(uint16_t);
 
 		char* GetDataBuffer();
 		char* GetControlBuffer();
