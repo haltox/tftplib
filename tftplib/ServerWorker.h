@@ -19,6 +19,7 @@ namespace tftplib {
 	class Server;
 	class MessageRequest;
 	class FileWriter;
+	class HaloBuffer;
 
 	class ServerWorker
 	{
@@ -46,9 +47,6 @@ namespace tftplib {
 			WAITING_FOR_DATA,			// Worker thread is waiting for data 
 										// from the client
 
-			SENDING_DATA,				// Worker thread is waiting for ACK from 
-										// the client
-			
 			WAITING_FOR_ACK,			// Worker thread is waiting for ACK from 
 										// the client
 
@@ -63,6 +61,7 @@ namespace tftplib {
 			std::weak_ptr<DatagramFactory> factory);
 
 		~ServerWorker();
+		ServerWorker& operator=(ServerWorker&&) = delete;
 
 		// Thread handling
 		void Start();
@@ -119,7 +118,6 @@ namespace tftplib {
 		void ProcessTransactionState();
 
 		void ProcessWaitingForDataState();
-		void ProcessSendingDataState();
 		void ProcessWaitingForAckState();
 
 		/* ***************************************************
@@ -203,6 +201,7 @@ namespace tftplib {
 
 		// 
 		Server &_parent;
+		std::unique_ptr<tftplib::HaloBuffer> _fileBuffer;
 		std::weak_ptr<DatagramFactory> _factory;
 	};
 }

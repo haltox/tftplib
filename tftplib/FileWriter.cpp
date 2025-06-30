@@ -1,39 +1,16 @@
 ﻿#include "pch.h"
 #include "FileWriter.h"
+#include "File.h"
 #include <Windows.h>
+#include "HaloBuffer.h"
 
 namespace tftplib {
-
-	/* *********************************************************************
-	 * File class declaration
-	 * *********************************************************************/
-	class FileWriter::File
-	{
-	public:
-		File() {}
-		File(HANDLE h);
-		~File();
-		File(File&& h) noexcept;
-		File& operator=(File&& h) noexcept;
-
-		File(const File& h) = delete;
-		File& operator=(const File& h) = delete;
-
-		void DeleteOnClose();
-		void Commit();
-
-		void Write(uint8_t *buffer, size_t sz);
-
-	private:
-		HANDLE _handle{ 0 };
-	};
 
 	/* *********************************************************************
 	 * OS Specific class declaration
 	 * *********************************************************************/
 	class FileWriter::Os
 	{
-
 	public:
 		std::filesystem::path MakeTempFileName() const;
 		std::unique_ptr<File> OpenFile(const std::filesystem::path &path);
@@ -41,61 +18,9 @@ namespace tftplib {
 			const std::filesystem::path& replacement);
 
 	private:
-		
 		mutable TCHAR _bufferDir[MAX_PATH + 1];
 		mutable TCHAR _bufferFileName[MAX_PATH + 1];
 	};
-
-	/* *********************************************************************
-	 * File class functions definition
-	 * *********************************************************************/
-	FileWriter::File::File(HANDLE h)
-		: _handle{ h }
-	{}
-
-	FileWriter::File::~File()
-	{
-		CloseHandle(_handle);
-	}
-
-	FileWriter::File::File(File&& h) noexcept
-	{
-		*this = std::move(h);
-	}
-
-	FileWriter::File&
-	FileWriter::File::operator=(File&& h) noexcept
-	{
-		std::swap(_handle, h._handle);
-		return *this;
-	}
-
-	void FileWriter::File::DeleteOnClose()
-	{
-		FILE_DISPOSITION_INFO info;
-		info.DeleteFileW = true;
-		SetFileInformationByHandle(_handle, FileDispositionInfo,
-			&info, sizeof(info));
-	}
-
-	void FileWriter::File::Commit()
-	{
-		// Remove delete on close flag.
-		FILE_DISPOSITION_INFO info;
-		info.DeleteFileW = false;
-		SetFileInformationByHandle(_handle, FileDispositionInfo,
-			&info, sizeof(info));
-
-		FlushFileBuffers(_handle);
-		CloseHandle(_handle);
-
-		_handle = 0;
-	}
-
-	void FileWriter::File::Write(uint8_t* buffer, size_t sz)
-	{
-		WriteFile(_handle, buffer, sz, nullptr, nullptr);
-	}
 
 	/* *********************************************************************
 	 * OS Specific functions definition
@@ -109,7 +34,7 @@ namespace tftplib {
 		return _bufferFileName;
 	}
 
-	std::unique_ptr<FileWriter::File>
+	std::unique_ptr<File>
 	FileWriter::Os::OpenFile(const std::filesystem::path& path)
 	{
 		HANDLE h = CreateFileW(
@@ -122,7 +47,7 @@ namespace tftplib {
 			nullptr //  no file template
 		);
 
-		return std::unique_ptr<FileWriter::File>(new File{h});
+		return std::unique_ptr<File>(new File{h});
 	}
 
 	void 
@@ -149,11 +74,14 @@ namespace tftplib {
 	/* *********************************************************************
 	 * FileWriter functions definition
 	 * *********************************************************************/
-	FileWriter::FileWriter(std::filesystem::path file, ForceNativeEOL opt)
+	FileWriter::FileWriter(std::filesystem::path file, 
+		HaloBuffer* buffer, 
+		ForceNativeEOL opt)
 		: _os { new FileWriter::Os }
 		, _pathTempFile { _os->MakeTempFileName() }
 		, _pathEndFile{file}
 		, _eolOpt { opt }
+		, _buffer{ buffer }
 		, _file { _os->OpenFile(_pathTempFile)}
 	{
 		_file->DeleteOnClose();
@@ -164,16 +92,93 @@ namespace tftplib {
 	}
 
 	void 
-	FileWriter::WriteBlock(uint8_t* buffer, size_t bufferSize)
+	FileWriter::WriteBlock(const uint8_t* buffer, size_t bufferSize)
 	{
-		// TODO EOL override
-		_file->Write(buffer, bufferSize);
+		if (_eolOpt == ForceNativeEOL::YES) 
+		{
+			BufferBlock(buffer, bufferSize);
+			BufferOut(_bytesWritten == 0 ? (bufferSize >> 1) : bufferSize );
+		}
+		else 
+		{
+			Write(buffer, bufferSize);
+		}
 	}
 
 	void 
 	FileWriter::Finalize()
 	{
+		if (_bytesBuffered > _bytesWritten)
+		{
+			BufferOut(_bytesBuffered - _bytesWritten);
+		}
+
 		_file->Commit();
 		_os->OverwriteFile(_pathEndFile, _pathTempFile);
+	}
+
+	void 
+	FileWriter::BufferBlock(const uint8_t* buffer, size_t bufferSize)
+	{
+		uint8_t*  target = 
+			_buffer->GetAt<uint8_t>(_bytesBuffered % _buffer->Size());
+		memcpy(target, buffer, bufferSize);
+		_bytesBuffered += bufferSize;
+	}
+
+	void
+	FileWriter::BufferOut(size_t bufferSize)
+	{
+		const uint8_t* data = _buffer->Get<uint8_t>();
+		const uint8_t* EOL = (const uint8_t*)"\r\n";
+
+		size_t cursor = _bytesWritten % _buffer->Size();
+		size_t beginning = cursor;
+		size_t processed = 0;
+
+		while (processed++ < bufferSize)
+		{
+			// CRLF
+			if (data[cursor] == '\r'
+				&& processed < _bytesBuffered
+				&& data[cursor + 1] == '\n')
+			{
+				WriteBufferedSegment(beginning, cursor);
+				Write(EOL, 2);
+
+				processed += 1, cursor += 2, beginning = cursor;
+			}
+			// UNIX line ending
+			else if (data[cursor] == '\n')
+			{
+				WriteBufferedSegment(beginning, cursor);
+				Write(EOL, 2);
+				
+				_bytesWritten -= 1, cursor += 1, beginning = cursor;
+			}
+			else
+			{
+				cursor += 1;
+			}
+		}
+		
+		WriteBufferedSegment(beginning, cursor);
+	}
+
+	void
+	FileWriter::Write(const uint8_t* buffer, size_t bufferSize)
+	{
+		_file->Write(buffer, bufferSize);
+		_bytesWritten += bufferSize;
+	}
+	
+	void
+	FileWriter::WriteBufferedSegment(size_t beginning, size_t end)
+	{
+		size_t segmentSize = end - beginning;
+		if (segmentSize != 0)
+		{
+			Write(_buffer->GetAt<uint8_t>(beginning), segmentSize);
+		}
 	}
 }

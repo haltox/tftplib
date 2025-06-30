@@ -144,7 +144,7 @@ namespace tftplib
 		WSAPROTOCOL_INFO* FindProvider(bool ipv6)
 		{
 			int af = ipv6 ? AF_INET6 : AF_INET;
-			for (int i = 0; i < _count; i++)
+			for (uint32_t i = 0; i < _count; i++)
 			{
 				WSAPROTOCOL_INFO* provider = &_listOfProviders[i];
 				if (provider->dwServiceFlags1 & XP1_CONNECTIONLESS

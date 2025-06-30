@@ -21,19 +21,27 @@
 #include <chrono>
 #include "Signal.h"
 
-
-int strLenS(const char* str, uint16_t maxSz) {
-	int sz = 0;
-	while (*str++ && maxSz--) {
-		sz++;
-	}
-
-	if (*(str-1)) return -1;
-	return sz;
-}
+#include "HaloBuffer.h"
+#include "FileWriter.h"
 
 int main()
 {
+
+#if 0
+    std::filesystem::path toWrite = "C:\\tftproot\\testeol.txt";
+    tftplib::HaloBuffer buffer {32};
+
+    const char* text = "\naa\naaa\na\n\n";
+
+    tftplib::FileWriter fw {toWrite, &buffer, 
+        tftplib::FileWriter::ForceNativeEOL::YES};
+
+    fw.WriteBlock((const uint8_t*)text, strlen(text));
+    fw.Finalize();
+
+    return 0;
+#endif
+
 	DebugManager::Init();
 
     tftplib::Server server;

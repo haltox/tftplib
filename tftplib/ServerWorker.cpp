@@ -3,7 +3,7 @@
 #include "Server.h"
 #include <thread>
 #include <string>
-
+#include "HaloBuffer.h"
 
 namespace tftplib {
 	class Finalizer {
@@ -26,6 +26,7 @@ namespace tftplib {
 	ServerWorker::ServerWorker(Server& parent, 
 		std::weak_ptr<DatagramFactory> factory)
 		: _parent{parent}
+		, _fileBuffer { std::make_unique<HaloBuffer>(0x020000)  }
 		, _factory { factory }
 	{
 	}
@@ -203,9 +204,6 @@ namespace tftplib {
 			case TransactionState::WAITING_FOR_DATA:
 				return ProcessWaitingForDataState();
 
-			case TransactionState::SENDING_DATA:
-				return ProcessSendingDataState();
-			
 			case TransactionState::WAITING_FOR_ACK:
 				return ProcessWaitingForAckState();
 
@@ -263,12 +261,6 @@ namespace tftplib {
 		{
 			Abort(errorResult);
 		}
-	}
-
-	void 
-	ServerWorker::ProcessSendingDataState()
-	{
-
 	}
 
 	void 
@@ -375,7 +367,7 @@ namespace tftplib {
 		/* **************************************************************
 		 *  Lock file 
 		 *  *************************************************************/
-		_fileLocked = rwrq->getMessageCode() == OpCode::RRQ
+		_fileLocked = _currentOperation == OpCode::RRQ
 			? _parent.FileSecurity().LockFileForRead(_filePath)
 			: _parent.FileSecurity().LockFileForWrite(_filePath);
 
@@ -387,23 +379,27 @@ namespace tftplib {
 		auto eolMode = _asciiMode 
 			? FileWriter::ForceNativeEOL::YES 
 			: FileWriter::ForceNativeEOL::NO;
-		_fw.reset( rwrq->getMessageCode() == OpCode::RRQ
-			? nullptr
-			: new FileWriter(_filePath, eolMode ) );
 
 		 /* **************************************************************
 		  *  Everything went well - update state and ack.
 		  *  *************************************************************/
 
-		_state = rwrq->getMessageCode() == OpCode::RRQ ?
-			TransactionState::SENDING_DATA :
-			TransactionState::WAITING_FOR_DATA ;
-		if (rwrq->getMessageCode() == OpCode::WRQ) {
+		if (_currentOperation == OpCode::WRQ) {
+			_fw.reset(new FileWriter(_filePath, _fileBuffer.get(), eolMode));
+			_state = TransactionState::WAITING_FOR_DATA;
 			if (!Ack(0))
 			{
 				MessageErrorCategory::CRITICAL_SERVER_ERROR;
 			}
 		}
+		else 
+		{
+			_fw.reset(nullptr);
+			_state = TransactionState::WAITING_FOR_ACK;
+
+			///TODO
+		}
+
 
 		_signal.EmitSignal();
 

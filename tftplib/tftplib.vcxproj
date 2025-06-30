@@ -142,9 +142,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Allocator.h" />
+    <ClInclude Include="File.h" />
+    <ClInclude Include="FileReader.h" />
     <ClInclude Include="FileSecurityHandler.h" />
     <ClInclude Include="FileWriter.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="HaloBuffer.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PoolOfBuffers.h" />
     <ClInclude Include="Datagram.h" />
@@ -161,8 +164,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Allocator.cpp" />
+    <ClCompile Include="File.cpp" />
+    <ClCompile Include="FileReader.cpp" />
     <ClCompile Include="FileSecurityHandler.cpp" />
     <ClCompile Include="FileWriter.cpp" />
+    <ClCompile Include="HaloBuffer.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
