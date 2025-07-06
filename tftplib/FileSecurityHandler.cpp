@@ -90,7 +90,7 @@ namespace tftplib {
 			return ValidationResult::INVALID_ACCESS_FORBIDDEN;
 		}
 
-		return ValidationResult::VALID;
+		return IsFilePathValid(path);
 	}
 
 	FileSecurityHandler::ValidationResult 
@@ -111,7 +111,7 @@ namespace tftplib {
 			return ValidationResult::INVALID_IS_DIRECTORY;
 		}
 
-		return ValidationResult::VALID;
+		return IsFilePathValid(path);
 	}
 
 	/* ***************************************************
